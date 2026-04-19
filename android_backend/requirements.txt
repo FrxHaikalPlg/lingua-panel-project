@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+gunicorn
+python-multipart
+opencv-python-headless
+numpy
+easyocr
+torch
+torchvision
+inference-sdk
+Pillow
+python-magic
+python-dotenv

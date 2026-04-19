@@ -1,0 +1,58 @@
+# ========================
+# Python / Backend
+# ========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+*.egg-info/
+
+# Backend temporary files
+android_backend/temp_images/*
+!android_backend/temp_images/.gitkeep
+android_backend/test.jpg
+android_backend/translated_result.jpg
+
+# ========================
+# Flutter / Dart
+# ========================
+# Firebase secrets (generated per-developer)
+linguapanel/android/app/google-services.json
+linguapanel/lib/firebase_options.dart
+linguapanel/firebase.json
+linguapanel/ios/Runner/GoogleService-Info.plist
+
+# Flutter generated
+linguapanel/.dart_tool/
+linguapanel/.flutter-plugins
+linguapanel/.flutter-plugins-dependencies
+linguapanel/.metadata
+linguapanel/build/
+linguapanel/pubspec.lock
+
+# ========================
+# IDE / Editor
+# ========================
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+
+# ========================
+# OS generated
+# ========================
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.swp
+*~
