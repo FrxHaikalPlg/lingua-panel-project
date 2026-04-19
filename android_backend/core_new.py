@@ -2,19 +2,13 @@
 import cv2
 import numpy as np
 import os
-from inference_sdk import InferenceHTTPClient
 import easyocr
 import requests
-from config import DEEPSEEK_API_KEY, ROBOFLOW_API_KEY
+from config import DEEPSEEK_API_KEY
+from model_inference import get_bubble_detector, get_character_detector
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
-
-# Inisialisasi Roboflow Client
-CLIENT = InferenceHTTPClient(
-    api_url="https://detect.roboflow.com",
-    api_key=ROBOFLOW_API_KEY
-)
 
 def init_reader(languages=['ja','en']):
     """Inisialisasi dan mengembalikan EasyOCR reader."""
@@ -42,26 +36,23 @@ def invert_if_needed(image):
         return cv2.bitwise_not(image)
     return image
 
-def process_image_with_rotation(client, image_path, output_path):
+def process_image_with_rotation(image_path, output_path):
     """Deteksi huruf, rotasi, dan menempatkannya di latar belakang putih."""
     image = cv2.imread(image_path)
     if image is None:
         return None
 
-    result = client.infer(image_path, model_id="tes-ajah-bang-gofd0/8")
-    predictions = result.get('predictions', [])
+    detector = get_character_detector()
+    predictions = detector.predict(image_path, confidence_threshold=0.5)
 
     # Latar belakang putih bersih
     result_image = np.full_like(image, 255, dtype=np.uint8)
 
     letters_detected = []
     for pred in predictions:
-        if pred['confidence'] < 0.5:
-            continue
-
-        x, y, w, h = int(pred['x']), int(pred['y']), int(pred['width']), int(pred['height'])
-        x1, y1 = max(0, int(x - w / 2)), max(0, int(y - h / 2))
-        x2, y2 = min(image.shape[1], int(x + w / 2)), min(image.shape[0], int(y + h / 2))
+        x, y, w, h = pred['x'], pred['y'], pred['width'], pred['height']
+        x1, y1 = pred['x1'], pred['y1']
+        x2, y2 = pred['x2'], pred['y2']
 
         letter_crop = image[y1:y2, x1:x2]
         letters_detected.append(pred)
@@ -77,7 +68,7 @@ def process_image_with_rotation(client, image_path, output_path):
     cv2.imwrite(output_path, result_image)
     return {'result': result_image, 'letters': letters_detected}
 
-def process_manga_page(client, image_path, output_base_dir):
+def process_manga_page(image_path, output_base_dir):
     """Deteksi balon teks, potong, dan proses."""
     os.makedirs(output_base_dir, exist_ok=True)
     
@@ -85,18 +76,19 @@ def process_manga_page(client, image_path, output_base_dir):
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
 
-    # Deteksi balon teks
-    result = client.infer(image_path, model_id="bubble-detection-gbjon/2")
-    predictions = result.get('predictions', [])
+    # Deteksi balon teks menggunakan local ONNX model
+    detector = get_bubble_detector()
+    predictions = detector.predict(image_path, confidence_threshold=0.6)
 
     crops = []
     for idx, pred in enumerate(predictions):
-        if pred.get('class_id') != 0 or pred['confidence'] < 0.6:
+        # Filter hanya class 'text_bubble' (class_id 0)
+        if pred['class'] != 'text_bubble':
             continue
 
-        x, y, w, h = int(pred['x']), int(pred['y']), int(pred['width']), int(pred['height'])
-        x1, y1 = max(0, int(x - w / 2)), max(0, int(y - h / 2))
-        x2, y2 = min(image.shape[1], int(x + w / 2)), min(image.shape[0], int(y + h / 2))
+        x, y, w, h = pred['x'], pred['y'], pred['width'], pred['height']
+        x1, y1 = pred['x1'], pred['y1']
+        x2, y2 = pred['x2'], pred['y2']
 
         if w < 20 or h < 20:
             continue
@@ -250,7 +242,7 @@ def run_translation_pipeline(image_path, lang='ja'):
             raise FileNotFoundError("Original image not found or unreadable.")
 
         # 2. Deteksi & Potong Balon Teks
-        bubble_crops = process_manga_page(CLIENT, image_path, temp_crop_dir)
+        bubble_crops = process_manga_page(image_path, temp_crop_dir)
         if not bubble_crops:
             print("No text bubbles detected.")
             return image_path # Kembalikan gambar asli jika tidak ada teks
@@ -263,7 +255,7 @@ def run_translation_pipeline(image_path, lang='ja'):
             os.makedirs(temp_processed_dir, exist_ok=True)
             
             # Proses rotasi huruf
-            rotated_result = process_image_with_rotation(CLIENT, crop_info['path'], processed_path)
+            rotated_result = process_image_with_rotation(crop_info['path'], processed_path)
             if not rotated_result:
                 continue
 
@@ -297,4 +289,3 @@ def run_translation_pipeline(image_path, lang='ja'):
             shutil.rmtree(temp_crop_dir)
         if os.path.exists(temp_processed_dir):
             shutil.rmtree(temp_processed_dir)
-

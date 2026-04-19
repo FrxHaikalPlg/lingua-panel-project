@@ -5,9 +5,7 @@ python-multipart
 opencv-python-headless
 numpy
 easyocr
-torch
-torchvision
-inference-sdk
+onnxruntime
 Pillow
-python-magic
 python-dotenv
+requests

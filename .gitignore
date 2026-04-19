@@ -16,6 +16,11 @@ android_backend/temp_images/*
 android_backend/test.jpg
 android_backend/translated_result.jpg
 
+# ML model files (too large for git, see README for setup)
+*.pth
+*.onnx
+android_backend/models/
+
 # ========================
 # Flutter / Dart
 # ========================

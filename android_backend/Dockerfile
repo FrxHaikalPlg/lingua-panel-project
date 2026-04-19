@@ -5,17 +5,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps for opencv / pillow / magic
+# System deps for opencv
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 file \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
  && rm -rf /var/lib/apt/lists/*
 
 # Install python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy ONNX models first (cached layer if models don't change)
+COPY models/ models/
+
 # App code
-COPY . .
+COPY *.py .
+COPY .env* ./
+
+# Create temp directory
+RUN mkdir -p temp_images
 
 # Cloud Run injects PORT
 ENV PORT=8080

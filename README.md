@@ -98,15 +98,36 @@ pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env and fill in your API keys
+# Edit .env and fill in your DeepSeek API key
+```
 
-# Run the server
+### 3. ML Model Setup
+
+This project uses **custom fine-tuned RF-DETR** models for bubble detection and character detection, running locally via ONNX Runtime (no external API needed).
+
+**Option A: Convert from PyTorch weights (if you have .pth files)**
+```bash
+# Install export dependencies (one-time)
+pip install "rfdetr[onnxexport]"
+
+# Run the conversion script
+python convert_to_onnx.py
+# This creates models/bubble_detection.onnx and models/character_detection.onnx
+```
+
+**Option B: Use pre-converted ONNX models**
+Place the following files in `android_backend/models/`:
+- `bubble_detection.onnx` — Text bubble detection model
+- `character_detection.onnx` — Character/letter detection model
+
+```bash
+# Start the server
 python api.py
 ```
 
 The backend will start at `http://localhost:8080`.
 
-### 3. Firebase Setup
+### 4. Firebase Setup
 
 1. Create a project on [Firebase Console](https://console.firebase.google.com/)
 2. Enable **Email/Password** and **Google** sign-in methods in Authentication
@@ -123,7 +144,7 @@ This generates `lib/firebase_options.dart` and `android/app/google-services.json
 
 > **Note:** A template file `lib/firebase_options_template.dart` is provided as reference for the expected structure.
 
-### 4. Flutter App Setup
+### 5. Flutter App Setup
 
 ```bash
 cd linguapanel
@@ -140,7 +161,7 @@ For connecting to a local backend from an Android emulator:
 flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080
 ```
 
-### 5. Docker Deployment (Optional)
+### 6. Docker Deployment (Optional)
 
 ```bash
 cd android_backend
