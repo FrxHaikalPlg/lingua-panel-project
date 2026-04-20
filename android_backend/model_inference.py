@@ -1,10 +1,5 @@
 """
-ONNX Model Inference Module
-============================
-Handles loading and running inference on RF-DETR ONNX models locally,
-replacing the dependency on the Roboflow API.
-
-Based on: https://github.com/PierreMarieCurie/rf-detr-onnx
+ONNX inference module for RF-DETR bubble and character detection models.
 """
 
 import cv2
@@ -17,9 +12,9 @@ from typing import List, Dict, Optional
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-# Class names for each model
-BUBBLE_CLASSES = ["text_bubble", "text_free"]
-CHARACTER_CLASSES = ["ignore", "letters", "line-dots"]
+# Class names for each model (index 0 = background in RF-DETR)
+BUBBLE_CLASSES = ["__background__", "text_bubble", "text_free"]
+CHARACTER_CLASSES = ["__background__", "ignore", "letters", "line-dots"]
 
 
 class ONNXDetector:
@@ -78,11 +73,9 @@ class ONNXDetector:
         - dets: [batch, num_queries, 4] → (cx, cy, w, h) NORMALIZED (0-1)
         - labels: [batch, num_queries, num_classes] → raw logits
         """
-        # Remove batch dimension
-        dets = dets[0]            # [300, 4]
-        labels_logits = labels_logits[0]  # [300, num_classes]
-
-        # Sigmoid to get probabilities
+        # Remove batch dimension, apply sigmoid
+        dets = dets[0]
+        labels_logits = labels_logits[0]
         scores_all = 1.0 / (1.0 + np.exp(-labels_logits))
 
         # Get max score per query
@@ -173,7 +166,7 @@ class ONNXDetector:
         )
 
 
-# --- Singleton model instances (loaded once at import time) ---
+# Singleton model instances — loaded once on first use
 
 _bubble_detector: Optional[ONNXDetector] = None
 _character_detector: Optional[ONNXDetector] = None

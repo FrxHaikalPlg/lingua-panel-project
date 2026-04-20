@@ -72,7 +72,7 @@ The Flutter app follows **MVVM (Model-View-ViewModel)** with the `provider` pack
 - Flutter SDK 3.x+
 - Python 3.11+
 - A [Firebase](https://console.firebase.google.com/) project
-- API keys for [Roboflow](https://roboflow.com/) and [DeepSeek](https://platform.deepseek.com/)
+- A [DeepSeek](https://platform.deepseek.com/) API key
 
 ---
 
