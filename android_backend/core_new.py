@@ -291,13 +291,25 @@ def create_translated_panel(image_bgr, crops, translated_text):
     # Convert back to BGR numpy array
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 
-def run_translation_pipeline(image_path, lang="ja"):
-    """Orchestrate the full manga translation pipeline."""
+def run_translation_pipeline(image_path, lang="ja", progress_callback=None, output_path=None):
+    """
+    Orchestrate the full manga translation pipeline.
+
+    Args:
+        image_path:        Path to the input image.
+        lang:              EasyOCR source language code.
+        progress_callback: Optional callable(message, step, total) for progress reporting.
+        output_path:       Where to save the translated image. Defaults to
+                           translated_{filename} in the same directory.
+    """
+    def _report(message: str, step: int, total: int):
+        if progress_callback:
+            progress_callback(message, step, total)
+
     base_dir = os.path.dirname(image_path)
     temp_crop_dir = os.path.join(base_dir, "temp_crops")
     temp_processed_dir = os.path.join(base_dir, "temp_processed")
@@ -308,12 +320,14 @@ def run_translation_pipeline(image_path, lang="ja"):
         if original_image is None:
             raise FileNotFoundError("Original image not found or unreadable.")
 
+        _report("Detecting text bubbles...", 1, 4)
         bubble_crops = process_manga_page(image_path, temp_crop_dir)
         if not bubble_crops:
             print("No text bubbles detected.")
             return image_path
 
         # Collect OCR text from all bubbles (sent together for page-level context)
+        _report("Running OCR...", 2, 4)
         all_ocr_text = ""
         for idx, crop_info in enumerate(bubble_crops):
             processed_path = os.path.join(temp_processed_dir, f"processed_{idx}.jpg")
@@ -332,12 +346,17 @@ def run_translation_pipeline(image_path, lang="ja"):
             print("No text found after OCR.")
             return image_path
 
+        _report("Translating...", 3, 4)
         translated_text = translate_text(all_ocr_text)
+
+        _report("Rendering result...", 4, 4)
         final_panel = create_translated_panel(original_image, bubble_crops, translated_text)
 
-        output_path = os.path.join(base_dir, f"translated_{os.path.basename(image_path)}")
-        cv2.imwrite(output_path, final_panel)
-        return output_path
+        dest = output_path or os.path.join(
+            os.path.dirname(image_path), f"translated_{os.path.basename(image_path)}"
+        )
+        cv2.imwrite(dest, final_panel)
+        return dest
 
     finally:
         for temp_dir in [temp_crop_dir, temp_processed_dir]:

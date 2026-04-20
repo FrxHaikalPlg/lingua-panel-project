@@ -23,7 +23,7 @@ COPY assets/ assets/
 COPY .env* ./
 
 # Create temp directory
-RUN mkdir -p temp_images
+RUN mkdir -p temp_images temp_jobs
 
 # Cloud Run injects PORT
 ENV PORT=8080

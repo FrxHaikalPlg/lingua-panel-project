@@ -1,82 +1,354 @@
-import uvicorn
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
-from fastapi.responses import FileResponse
-from fastapi.concurrency import run_in_threadpool
-from starlette.background import BackgroundTask
+import io
 import os
 import shutil
+import threading
 import uuid
-from core_new import run_translation_pipeline
+import zipfile
+import uvicorn
 
-app = FastAPI()
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
+from typing import List
+
+from core_new import run_translation_pipeline
+from job_manager import job_manager, JOBS_DIR
+
+app = FastAPI(title="LinguaPanel API", version="2.0.0")
 
 TEMP_DIR = "temp_images"
 os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs(JOBS_DIR, exist_ok=True)
+
+ALLOWED_EXTS = {".png", ".jpg", ".jpeg"}
 
 
-def cleanup_files(paths: list):
-    """Delete temporary files after response is sent."""
-    for path in paths:
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
+def _save_upload(file: UploadFile, dest_dir: str) -> str:
+    """Save an uploaded file to dest_dir and return its full path."""
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXTS and ext != ".zip":
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+    path = os.path.join(dest_dir, f"{uuid.uuid4()}{ext}")
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return path
+
+
+def _delete(path: str):
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _make_progress_callback(job_id: str):
+    """Return a callback that updates job progress for a single-image job."""
+    def cb(message: str, step: int, total: int):
+        job_manager.update(job_id, message=message, progress=step, total=total, status="running")
+    return cb
+
+
+# ---------------------------------------------------------------------------
+# Background workers
+# ---------------------------------------------------------------------------
+
+def _run_single_job(job_id: str, image_path: str, lang: str):
+    """Background worker for single-image translation job."""
+    try:
+        result_filename = f"page_1{os.path.splitext(image_path)[1]}"
+        output_path = os.path.join(job_manager.get(job_id).result_dir, result_filename)
+
+        run_translation_pipeline(
+            image_path,
+            lang=lang,
+            progress_callback=_make_progress_callback(job_id),
+            output_path=output_path,
+        )
+
+        job_manager.append_result(job_id, page=1, filename=result_filename)
+        job_manager.update(job_id, status="done", progress=4, total=4, message="Done!")
+
+    except Exception as e:
+        print(f"[Job {job_id}] Error: {e}")
+        job_manager.update(job_id, status="failed", error=str(e))
+    finally:
+        _delete(image_path)
+
+
+def _run_chapter_job(job_id: str, image_paths: list[str], lang: str):
+    """Background worker for chapter (multi-page) translation job."""
+    total = len(image_paths)
+
+    def page_progress(message: str, step: int, step_total: int, page_idx: int):
+        # Map 4 pipeline steps → fractional progress within the page
+        overall_step = page_idx * 4 + step
+        overall_total = total * 4
+        full_msg = f"Page {page_idx + 1}/{total} — {message}"
+        job_manager.update(job_id, message=full_msg, progress=overall_step,
+                           total=overall_total, status="running")
+
+    try:
+        for page_idx, image_path in enumerate(image_paths):
+            ext = os.path.splitext(image_path)[1].lower()
+            result_filename = f"page_{page_idx + 1:03d}{ext}"
+            output_path = os.path.join(job_manager.get(job_id).result_dir, result_filename)
+
+            cb = lambda msg, step, stotal, i=page_idx: page_progress(msg, step, stotal, i)
+
+            run_translation_pipeline(
+                image_path,
+                lang=lang,
+                progress_callback=cb,
+                output_path=output_path,
+            )
+
+            job_manager.append_result(job_id, page=page_idx + 1, filename=result_filename)
+            _delete(image_path)
+
+        job_manager.update(job_id, status="done",
+                           progress=total * 4, total=total * 4,
+                           message=f"Done! {total} pages translated.")
+
+    except Exception as e:
+        print(f"[Job {job_id}] Error: {e}")
+        job_manager.update(job_id, status="failed", error=str(e))
+    finally:
+        # Clean up any remaining temp input files
+        for p in image_paths:
+            _delete(p)
+
+
+# ---------------------------------------------------------------------------
+# Routes — legacy quick endpoint
+# ---------------------------------------------------------------------------
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to the Manga Translator API"}
+    return {"message": "LinguaPanel Translation API v2", "docs": "/docs"}
 
 
-@app.post("/translate_image")
+@app.post("/translate_image", summary="Quick single-image translate (synchronous)")
 async def translate_image(
-    lang: str = Query("ja", description="Source language for OCR (e.g., 'ja', 'zh-cn', 'en')"),
+    lang: str = Query("ja", description="Source language for OCR"),
     file: UploadFile = File(...),
 ):
     """
-    Accepts a manga image, runs the full translation pipeline,
-    and returns the processed image with translated text overlaid.
+    Legacy synchronous endpoint — uploads image and waits for the full
+    translated result. Useful for quick testing via Swagger UI.
     """
     file_path = None
     try:
-        file_extension = os.path.splitext(file.filename)[1].lower()
-        if file_extension not in [".png", ".jpg", ".jpeg"]:
-            raise HTTPException(status_code=400, detail="Invalid file type. Please upload a PNG, JPG, or JPEG image.")
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in ALLOWED_EXTS:
+            raise HTTPException(status_code=400, detail="Invalid file type.")
+        file_path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}{ext}")
+        with open(file_path, "wb") as buf:
+            shutil.copyfileobj(file.file, buf)
 
-        unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = os.path.join(TEMP_DIR, unique_filename)
+        result_path = await run_in_threadpool(run_translation_pipeline, file_path, lang)
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if not os.path.exists(result_path):
+            raise HTTPException(status_code=500, detail="Output file not found.")
 
-        processed_image_path = await run_in_threadpool(run_translation_pipeline, file_path, lang=lang)
-
-        if not os.path.exists(processed_image_path):
-            raise HTTPException(status_code=500, detail="Processing failed: output file not found.")
-
-        out_ext = os.path.splitext(processed_image_path)[1].lower()
+        out_ext = os.path.splitext(result_path)[1].lower()
         media_type = "image/png" if out_ext == ".png" else "image/jpeg"
-
-        # Collect all temp files to delete after response is sent.
-        # Input and output may be the same path when no bubbles are detected.
-        paths_to_clean = list({file_path, processed_image_path})
-        cleanup_task = BackgroundTask(cleanup_files, paths=paths_to_clean)
-
+        paths_to_clean = list({file_path, result_path})
         return FileResponse(
-            path=processed_image_path,
-            media_type=media_type,
-            filename=f"translated_{os.path.basename(processed_image_path)}",
-            background=cleanup_task,
+            path=result_path, media_type=media_type,
+            filename=f"translated_{os.path.basename(result_path)}",
+            background=BackgroundTask(lambda ps: [_delete(p) for p in ps], paths_to_clean),
         )
-
     except Exception as e:
-        print(f"Error during image processing: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred during processing: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if file:
-            file.file.close()
+        file.file.close()
+
+
+# ---------------------------------------------------------------------------
+# Routes — job-based endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/jobs/image", summary="Translate single image (async job)")
+async def create_image_job(
+    lang: str = Query("ja", description="Source language for OCR"),
+    file: UploadFile = File(...),
+):
+    """
+    Creates a background translation job for a single image.
+    Returns a job_id immediately. Poll /jobs/{id}/status for progress.
+    """
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(status_code=400, detail="Invalid file type. Use PNG, JPG, or JPEG.")
+
+    file_path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}{ext}")
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    file.file.close()
+
+    job = job_manager.create(total_steps=4)
+    threading.Thread(
+        target=_run_single_job,
+        args=(job.id, file_path, lang),
+        daemon=True,
+    ).start()
+
+    return {"job_id": job.id, "status": job.status}
+
+
+@app.post("/jobs/chapter", summary="Translate multiple pages (async job)")
+async def create_chapter_job(
+    lang: str = Query("ja", description="Source language for OCR"),
+    files: List[UploadFile] = File(...),
+):
+    """
+    Creates a background translation job for a chapter.
+
+    Accepts **either**:
+    - A single `.zip` file containing manga page images, OR
+    - Multiple image files uploaded directly (sorted by filename).
+
+    Progress and individual page results are available via /jobs/{id}/status.
+    """
+    image_paths: list[str] = []
+
+    if len(files) == 1 and files[0].filename.lower().endswith(".zip"):
+        # --- ZIP input ---
+        zip_tmp = os.path.join(TEMP_DIR, f"{uuid.uuid4()}.zip")
+        with open(zip_tmp, "wb") as f:
+            shutil.copyfileobj(files[0].file, f)
+        files[0].file.close()
+
+        extract_dir = os.path.join(TEMP_DIR, str(uuid.uuid4()))
+        os.makedirs(extract_dir, exist_ok=True)
+        with zipfile.ZipFile(zip_tmp, "r") as zf:
+            for member in sorted(zf.namelist()):
+                ext = os.path.splitext(member)[1].lower()
+                if ext in ALLOWED_EXTS:
+                    dest = os.path.join(extract_dir, os.path.basename(member))
+                    with zf.open(member) as src, open(dest, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    image_paths.append(dest)
+        _delete(zip_tmp)
+
+    else:
+        # --- Multiple image input ---
+        # Sort by original filename to preserve page order
+        sorted_files = sorted(files, key=lambda f: f.filename)
+        for uf in sorted_files:
+            ext = os.path.splitext(uf.filename)[1].lower()
+            if ext not in ALLOWED_EXTS:
+                continue
+            path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}{ext}")
+            with open(path, "wb") as f:
+                shutil.copyfileobj(uf.file, f)
+            uf.file.close()
+            image_paths.append(path)
+
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="No valid image files found in upload.")
+
+    job = job_manager.create(total_steps=len(image_paths) * 4)
+    threading.Thread(
+        target=_run_chapter_job,
+        args=(job.id, image_paths, lang),
+        daemon=True,
+    ).start()
+
+    return {"job_id": job.id, "status": job.status, "total_pages": len(image_paths)}
+
+
+@app.get("/jobs/{job_id}/status", summary="Get job progress and available results")
+def get_job_status(job_id: str):
+    """
+    Returns current job status, progress, and URLs for pages that have
+    already been translated (useful for progressive display).
+    """
+    job = job_manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    percent = int(job.progress / job.total * 100) if job.total else 0
+    results_with_urls = [
+        {**r, "url": f"/jobs/{job_id}/pages/{r['page']}"}
+        for r in job.results
+    ]
+
+    return {
+        "job_id": job_id,
+        "status": job.status,
+        "message": job.message,
+        "progress": job.progress,
+        "total": job.total,
+        "percent": percent,
+        "results": results_with_urls,
+        "error": job.error,
+    }
+
+
+@app.get("/jobs/{job_id}/pages/{page}", summary="Download a single translated page")
+def get_job_page(job_id: str, page: int):
+    """Serve an individual translated page once it's ready."""
+    job = job_manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    match = next((r for r in job.results if r["page"] == page), None)
+    if not match:
+        raise HTTPException(status_code=404, detail=f"Page {page} not yet available.")
+
+    file_path = os.path.join(job.result_dir, match["filename"])
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk.")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    media_type = "image/png" if ext == ".png" else "image/jpeg"
+    return FileResponse(path=file_path, media_type=media_type, filename=match["filename"])
+
+
+@app.get("/jobs/{job_id}/download", summary="Download all translated pages as ZIP")
+def download_job_zip(job_id: str):
+    """
+    Stream a ZIP archive of all currently translated pages.
+    Can be called before job completes to get partial results.
+    """
+    job = job_manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if not job.results:
+        raise HTTPException(status_code=404, detail="No pages translated yet.")
+
+    def generate_zip():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for result in sorted(job.results, key=lambda r: r["page"]):
+                file_path = os.path.join(job.result_dir, result["filename"])
+                if os.path.exists(file_path):
+                    zf.write(file_path, arcname=result["filename"])
+        buf.seek(0)
+        yield buf.read()
+
+    return StreamingResponse(
+        generate_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=translated_chapter_{job_id[:8]}.zip"},
+    )
+
+
+@app.delete("/jobs/{job_id}", summary="Delete a job and its files")
+def delete_job(job_id: str):
+    """Manually delete a job and all associated output files."""
+    job = job_manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job_manager.delete(job_id)
+    return {"message": "Job deleted."}
 
 
 if __name__ == "__main__":
