@@ -64,7 +64,7 @@ class ONNXDetector:
         labels_logits: np.ndarray,
         orig_w: int,
         orig_h: int,
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.35,
     ) -> List[Dict]:
         """
         Post-process model outputs to list of detections.
@@ -135,7 +135,7 @@ class ONNXDetector:
     def predict(
         self,
         image_or_path,
-        confidence_threshold: float = 0.5,
+        confidence_threshold: float = 0.35,
     ) -> List[Dict]:
         """
         Run detection on an image.

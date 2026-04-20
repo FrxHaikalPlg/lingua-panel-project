@@ -30,14 +30,54 @@ def init_reader(languages=["ja", "en"]):
     return easyocr.Reader(languages)
 
 
-def perform_ocr(reader, image):
-    """Run EasyOCR on an image and return results above confidence threshold."""
+def _ocr_raw(reader, image):
+    """Run EasyOCR on a single image, returning results above confidence threshold."""
     if image is None:
         return []
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    results = reader.readtext(rgb)
-    # Filter low-confidence detections (likely OCR noise)
-    return [r for r in results if r[2] >= OCR_CONFIDENCE_THRESHOLD]
+    return [r for r in reader.readtext(rgb) if r[2] >= OCR_CONFIDENCE_THRESHOLD]
+
+
+def perform_ocr(reader, image):
+    """
+    Run OCR with multiple preprocessing fallbacks to maximize recall.
+    Tries in order:
+      1. Image as-is
+      2. CLAHE contrast enhancement
+      3. 2× upscale (helps with small text)
+      4. Otsu binarization
+    Returns results from the first strategy that yields output.
+    """
+    if image is None:
+        return []
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    candidates = [
+        image,  # 1. original
+    ]
+
+    # 2. CLAHE (adaptive contrast enhancement)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+    enhanced = clahe.apply(gray)
+    candidates.append(cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR))
+
+    # 3. Upscale 2× (helps when text is small)
+    h, w = image.shape[:2]
+    if max(h, w) < 300:
+        up = cv2.resize(image, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+        candidates.append(up)
+
+    # 4. Otsu binarization
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    candidates.append(cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR))
+
+    for img in candidates:
+        results = _ocr_raw(reader, img)
+        if results:
+            return results
+
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +108,7 @@ def process_image_with_rotation(image_path, output_path):
         return None
 
     detector = get_character_detector()
-    predictions = detector.predict(image_path, confidence_threshold=0.5)
+    predictions = detector.predict(image_path, confidence_threshold=0.35)
 
     result_image = np.full_like(image, 255, dtype=np.uint8)
     letters_detected = []
@@ -103,14 +143,14 @@ def process_manga_page(image_path, output_base_dir):
 
     img_w = image.shape[1]
     detector = get_bubble_detector()
-    predictions = detector.predict(image_path, confidence_threshold=0.4)
+    predictions = detector.predict(image_path, confidence_threshold=0.25)
 
     # Filter to text_bubble class only, skip tiny detections
     bubbles = [
         p for p in predictions
         if p["class"] == "text_bubble" and p["width"] >= 20 and p["height"] >= 20
     ]
-    print(f"Bubble detection: {len(bubbles)} text_bubble(s) found (from {len(predictions)} total predictions).")
+
 
     # Sort in manga reading order: top-to-bottom primary, right-to-left secondary
     # Divide page into horizontal bands (roughly 1/5 of page height each)
@@ -284,13 +324,10 @@ def create_translated_panel(image_bgr, crops, translated_text):
     # Convert BGR → PIL RGBA for compositing
     pil_image = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
-    overlaid = 0
     for idx, text_to_draw in translation_by_area.items():
         if idx >= len(crops) or not text_to_draw.strip():
             continue
         pil_image = draw_translated_text(pil_image, crops[idx]["bbox"], text_to_draw)
-        overlaid += 1
-    print(f"Text overlay: {overlaid}/{len(crops)} bubble(s) rendered.")
 
     # Convert back to BGR numpy array
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -339,18 +376,16 @@ def run_translation_pipeline(image_path, lang="ja", progress_callback=None, outp
 
             rotated_result = process_image_with_rotation(crop_info["path"], processed_path)
             if not rotated_result:
-                print(f"[DEBUG] Bubble #{idx + 1}: process_image_with_rotation returned None, skipping.")
                 continue
 
             ocr_results = perform_ocr(reader, rotated_result["result"])
             if not ocr_results:
-                # Fallback: OCR directly on the rotated crop (bypass character reconstruction)
+                # All strategies on rotated result failed — try original crop as last resort
                 ocr_results = perform_ocr(reader, crop_info["image"])
+
             if ocr_results:
                 text = " ".join(r[1] for r in ocr_results)
                 all_ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
-
-        print(f"OCR: extracted text from {all_ocr_text.count('[Text Area #')}/{len(bubble_crops)} bubble(s).")
 
         if not all_ocr_text.strip():
             print("No text found after OCR.")
