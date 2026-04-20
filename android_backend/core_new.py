@@ -103,13 +103,14 @@ def process_manga_page(image_path, output_base_dir):
 
     img_w = image.shape[1]
     detector = get_bubble_detector()
-    predictions = detector.predict(image_path, confidence_threshold=0.6)
+    predictions = detector.predict(image_path, confidence_threshold=0.4)
 
     # Filter to text_bubble class only, skip tiny detections
     bubbles = [
         p for p in predictions
         if p["class"] == "text_bubble" and p["width"] >= 20 and p["height"] >= 20
     ]
+    print(f"Bubble detection: {len(bubbles)} text_bubble(s) found (from {len(predictions)} total predictions).")
 
     # Sort in manga reading order: top-to-bottom primary, right-to-left secondary
     # Divide page into horizontal bands (roughly 1/5 of page height each)
@@ -283,10 +284,13 @@ def create_translated_panel(image_bgr, crops, translated_text):
     # Convert BGR → PIL RGBA for compositing
     pil_image = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
+    overlaid = 0
     for idx, text_to_draw in translation_by_area.items():
         if idx >= len(crops) or not text_to_draw.strip():
             continue
         pil_image = draw_translated_text(pil_image, crops[idx]["bbox"], text_to_draw)
+        overlaid += 1
+    print(f"Text overlay: {overlaid}/{len(crops)} bubble(s) rendered.")
 
     # Convert back to BGR numpy array
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -335,12 +339,18 @@ def run_translation_pipeline(image_path, lang="ja", progress_callback=None, outp
 
             rotated_result = process_image_with_rotation(crop_info["path"], processed_path)
             if not rotated_result:
+                print(f"[DEBUG] Bubble #{idx + 1}: process_image_with_rotation returned None, skipping.")
                 continue
 
             ocr_results = perform_ocr(reader, rotated_result["result"])
+            if not ocr_results:
+                # Fallback: OCR directly on the rotated crop (bypass character reconstruction)
+                ocr_results = perform_ocr(reader, crop_info["image"])
             if ocr_results:
                 text = " ".join(r[1] for r in ocr_results)
                 all_ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
+
+        print(f"OCR: extracted text from {all_ocr_text.count('[Text Area #')}/{len(bubble_crops)} bubble(s).")
 
         if not all_ocr_text.strip():
             print("No text found after OCR.")
