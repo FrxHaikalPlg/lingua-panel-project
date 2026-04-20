@@ -5,9 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps for opencv
+# System deps for opencv and Pillow font rendering
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libfreetype6 \
  && rm -rf /var/lib/apt/lists/*
 
 # Install python deps
@@ -17,8 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy ONNX models first (cached layer if models don't change)
 COPY models/ models/
 
-# App code
+# App code and assets (fonts)
 COPY *.py .
+COPY assets/ assets/
 COPY .env* ./
 
 # Create temp directory

@@ -2,13 +2,27 @@ import cv2
 import numpy as np
 import os
 import shutil
+import textwrap
 import easyocr
 import requests
+from PIL import Image, ImageDraw, ImageFont
 from config import DEEPSEEK_API_KEY
 from model_inference import get_bubble_detector, get_character_detector
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
+# Minimum EasyOCR confidence to accept a text detection
+OCR_CONFIDENCE_THRESHOLD = 0.35
+
+# Font paths bundled with the backend
+_FONT_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
+_FONT_REGULAR = os.path.join(_FONT_DIR, "NotoSans-Regular.ttf")
+_FONT_BOLD = os.path.join(_FONT_DIR, "NotoSans-Bold.ttf")
+
+
+# ---------------------------------------------------------------------------
+# OCR
+# ---------------------------------------------------------------------------
 
 def init_reader(languages=["ja", "en"]):
     """Initialize and return an EasyOCR reader."""
@@ -16,20 +30,36 @@ def init_reader(languages=["ja", "en"]):
     return easyocr.Reader(languages)
 
 
+def perform_ocr(reader, image):
+    """Run EasyOCR on an image and return results above confidence threshold."""
+    if image is None:
+        return []
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = reader.readtext(rgb)
+    # Filter low-confidence detections (likely OCR noise)
+    return [r for r in results if r[2] >= OCR_CONFIDENCE_THRESHOLD]
+
+
+# ---------------------------------------------------------------------------
+# Image helpers
+# ---------------------------------------------------------------------------
+
 def check_background_color(image, threshold=0.6):
-    """Return 'white' if the image background is predominantly light, else 'mixed'."""
+    """Return 'white' if the image background is predominantly light."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-    total_pixels = image.shape[0] * image.shape[1]
-    light_pixels = cv2.countNonZero(cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1])
-    return "white" if (light_pixels / total_pixels) > threshold else "mixed"
+    total = image.shape[0] * image.shape[1]
+    light = cv2.countNonZero(cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)[1])
+    return "white" if (light / total) > threshold else "mixed"
 
 
 def invert_if_needed(image):
     """Invert image colors if the background is not white."""
-    if check_background_color(image) != "white":
-        return cv2.bitwise_not(image)
-    return image
+    return cv2.bitwise_not(image) if check_background_color(image) != "white" else image
 
+
+# ---------------------------------------------------------------------------
+# Detection & cropping
+# ---------------------------------------------------------------------------
 
 def process_image_with_rotation(image_path, output_path):
     """Detect characters, rotate vertical text, and place on a white background."""
@@ -61,26 +91,34 @@ def process_image_with_rotation(image_path, output_path):
 
 
 def process_manga_page(image_path, output_base_dir):
-    """Detect text bubbles, crop, rotate, and save each bubble for OCR."""
+    """
+    Detect text bubbles, crop each one, and return in manga reading order
+    (right-to-left, top-to-bottom).
+    """
     os.makedirs(output_base_dir, exist_ok=True)
 
     image = cv2.imread(image_path)
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
 
+    img_w = image.shape[1]
     detector = get_bubble_detector()
     predictions = detector.predict(image_path, confidence_threshold=0.6)
 
+    # Filter to text_bubble class only, skip tiny detections
+    bubbles = [
+        p for p in predictions
+        if p["class"] == "text_bubble" and p["width"] >= 20 and p["height"] >= 20
+    ]
+
+    # Sort in manga reading order: top-to-bottom primary, right-to-left secondary
+    # Divide page into horizontal bands (roughly 1/5 of page height each)
+    band_height = max(1, image.shape[0] // 5)
+    bubbles.sort(key=lambda p: (p["y1"] // band_height, -(p["x1"] + p["x2"]) / 2))
+
     crops = []
-    for idx, pred in enumerate(predictions):
-        if pred["class"] != "text_bubble":
-            continue
-
+    for idx, pred in enumerate(bubbles):
         x1, y1, x2, y2 = pred["x1"], pred["y1"], pred["x2"], pred["y2"]
-        w, h = pred["width"], pred["height"]
-
-        if w < 20 or h < 20:
-            continue
 
         cropped = image[y1:y2, x1:x2]
         rotated = cv2.rotate(cropped, cv2.ROTATE_90_COUNTERCLOCKWISE)
@@ -88,22 +126,30 @@ def process_manga_page(image_path, output_base_dir):
 
         crop_path = os.path.join(output_base_dir, f"crop_{idx}.jpg")
         cv2.imwrite(crop_path, final_crop)
-
         crops.append({"path": crop_path, "bbox": [x1, y1, x2, y2], "image": final_crop})
 
     return crops
 
 
-def perform_ocr(reader, image):
-    """Run EasyOCR on an image and return results."""
-    if image is None:
-        return []
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    return reader.readtext(rgb_image)
+# ---------------------------------------------------------------------------
+# Translation
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """You are a professional manga translator specializing in Japanese-to-English localization.
+
+The source text comes from OCR and may contain recognition errors: wrong kanji, fragmented words, or missing characters. Your job is to infer the correct meaning and produce a natural English translation.
+
+Rules:
+- Use casual, natural English — manga characters speak informally, not formally
+- Preserve emotional tone and intensity (shock, hesitation, excitement, etc.)
+- Transliterate or translate sound effects/onomatopoeia naturally (e.g. ドキドキ → "thump thump")
+- If a text area is too garbled to translate confidently, make your best inference — never skip or output "N/A"
+- Preserve the [Text Area #N] markers exactly as given in your output
+- Return only the translated text with [Text Area #N] markers, nothing else"""
 
 
 def translate_text(text, source_lang="Japanese", target_lang="English"):
-    """Translate text using the DeepSeek API."""
+    """Translate OCR text using the DeepSeek API with a manga-optimized prompt."""
     if not DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY not configured")
 
@@ -114,17 +160,10 @@ def translate_text(text, source_lang="Japanese", target_lang="English"):
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    f"You are a professional translator. Translate the following {source_lang} "
-                    f"text to {target_lang}. Handle OCR errors gracefully. "
-                    "Provide only the translated text."
-                ),
-            },
-            {"role": "user", "content": text},
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Translate the following {source_lang} manga text to {target_lang}:\n\n{text}"},
         ],
-        "temperature": 1.3,
+        "temperature": 0.8,
     }
 
     try:
@@ -136,18 +175,101 @@ def translate_text(text, source_lang="Japanese", target_lang="English"):
         return f"[Translation Failed] {text}"
 
 
-def create_translated_panel(image, crops, translated_text):
-    """Overlay translated text onto the original manga panel."""
-    translated_panel = image.copy()
+# ---------------------------------------------------------------------------
+# Text overlay (Pillow-based)
+# ---------------------------------------------------------------------------
 
-    # Parse structured translation response into a dict keyed by area index
+def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """Load NotoSans at a given size, with fallback to Pillow default."""
+    font_path = _FONT_BOLD if bold else _FONT_REGULAR
+    try:
+        return ImageFont.truetype(font_path, size)
+    except (IOError, OSError):
+        return ImageFont.load_default()
+
+
+def _fit_text_in_bubble(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    bbox: list,
+    padding: int = 10,
+) -> tuple:
+    """
+    Find the largest font size where the wrapped text fits inside the bubble.
+    Returns (font, wrapped_lines).
+    """
+    x1, y1, x2, y2 = bbox
+    max_w = (x2 - x1) - padding * 2
+    max_h = (y2 - y1) - padding * 2
+
+    for font_size in range(20, 7, -1):
+        font = _load_font(font_size, bold=False)
+        # Estimate chars per line from max_w and average char width
+        avg_char_w = font_size * 0.55
+        chars_per_line = max(1, int(max_w / avg_char_w))
+        lines = textwrap.wrap(text, width=chars_per_line)
+        if not lines:
+            continue
+        # Measure actual rendered height
+        line_h = font_size + 3
+        total_h = line_h * len(lines)
+        # Measure widest line
+        widest = max(draw.textlength(line, font=font) for line in lines)
+        if total_h <= max_h and widest <= max_w:
+            return font, lines, line_h
+
+    # Fallback: minimum font size, truncate lines
+    font = _load_font(8)
+    lines = textwrap.wrap(text, width=max(1, int(max_w / 5)))[:int(max_h / 11)]
+    return font, lines, 11
+
+
+def draw_translated_text(pil_image: Image.Image, bbox: list, text: str) -> Image.Image:
+    """
+    White out a bubble region and draw translated text centered inside it.
+    Uses Pillow for crisp, anti-aliased rendering.
+    """
+    x1, y1, x2, y2 = bbox
+    bw = x2 - x1
+    bh = y2 - y1
+    padding = max(6, min(bw, bh) // 12)
+
+    # White-out the bubble with a soft rounded rectangle
+    overlay = Image.new("RGBA", pil_image.size, (0, 0, 0, 0))
+    ov_draw = ImageDraw.Draw(overlay)
+    radius = min(bw, bh) // 6
+    ov_draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=(255, 255, 255, 230))
+    pil_image = Image.alpha_composite(pil_image.convert("RGBA"), overlay).convert("RGB")
+
+    draw = ImageDraw.Draw(pil_image)
+    font, lines, line_h = _fit_text_in_bubble(draw, text, bbox, padding)
+
+    total_text_h = line_h * len(lines)
+    start_y = y1 + padding + (bh - padding * 2 - total_text_h) // 2
+
+    for i, line in enumerate(lines):
+        line_w = draw.textlength(line, font=font)
+        tx = x1 + padding + (bw - padding * 2 - line_w) // 2
+        ty = start_y + i * line_h
+        # Subtle shadow for readability
+        draw.text((tx + 1, ty + 1), line, font=font, fill=(180, 180, 180))
+        draw.text((tx, ty), line, font=font, fill=(20, 20, 20))
+
+    return pil_image
+
+
+def create_translated_panel(image_bgr, crops, translated_text):
+    """Overlay translated text bubbles onto the original manga panel."""
+    # Parse [Text Area #N] blocks from DeepSeek response
     translation_by_area = {}
     current_area = None
     current_text = []
     for line in translated_text.split("\n"):
         if line.startswith("[Text Area #") and "]" in line:
             if current_area is not None and current_text:
-                translation_by_area[current_area] = "\n".join(current_text).strip()
+                translation_by_area[current_area] = " ".join(
+                    " ".join(current_text).split()
+                )
             try:
                 current_area = int(line.split("#")[1].split("]")[0]) - 1
                 current_text = []
@@ -156,51 +278,23 @@ def create_translated_panel(image, crops, translated_text):
         elif current_area is not None:
             current_text.append(line)
     if current_area is not None and current_text:
-        translation_by_area[current_area] = "\n".join(current_text).strip()
+        translation_by_area[current_area] = " ".join(" ".join(current_text).split())
+
+    # Convert BGR → PIL RGBA for compositing
+    pil_image = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
 
     for idx, text_to_draw in translation_by_area.items():
-        if idx >= len(crops):
+        if idx >= len(crops) or not text_to_draw.strip():
             continue
+        pil_image = draw_translated_text(pil_image, crops[idx]["bbox"], text_to_draw)
 
-        x1, y1, x2, y2 = crops[idx]["bbox"]
-        bubble_width = x2 - x1
-        bubble_height = y2 - y1
+    # Convert back to BGR numpy array
+    return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-        # White out the bubble area
-        overlay = translated_panel.copy()
-        cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 255, 255), -1)
-        cv2.addWeighted(overlay, 0.9, translated_panel, 0.1, 0, translated_panel)
 
-        # Text wrapping
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = max(0.5, min(1.2, min(bubble_width, bubble_height) / 250))
-        thickness = 1
-
-        lines = []
-        current_line = ""
-        for word in text_to_draw.replace("\n", " ").split(" "):
-            test_line = f"{current_line} {word}".strip()
-            (w, _), _ = cv2.getTextSize(test_line, font, font_scale, thickness)
-            if w < bubble_width - 20:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
-
-        line_height = cv2.getTextSize("A", font, font_scale, thickness)[0][1] + 5
-        start_y = y1 + (bubble_height - line_height * len(lines)) // 2 + line_height
-
-        for i, line in enumerate(lines):
-            (lw, _), _ = cv2.getTextSize(line, font, font_scale, thickness)
-            text_x = x1 + (bubble_width - lw) // 2
-            text_y = start_y + i * line_height
-            cv2.putText(translated_panel, line, (text_x, text_y), font, font_scale, (0, 0, 0), thickness + 1)
-            cv2.putText(translated_panel, line, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
-
-    return translated_panel
-
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
 
 def run_translation_pipeline(image_path, lang="ja"):
     """Orchestrate the full manga translation pipeline."""
@@ -219,6 +313,7 @@ def run_translation_pipeline(image_path, lang="ja"):
             print("No text bubbles detected.")
             return image_path
 
+        # Collect OCR text from all bubbles (sent together for page-level context)
         all_ocr_text = ""
         for idx, crop_info in enumerate(bubble_crops):
             processed_path = os.path.join(temp_processed_dir, f"processed_{idx}.jpg")
@@ -230,7 +325,7 @@ def run_translation_pipeline(image_path, lang="ja"):
 
             ocr_results = perform_ocr(reader, rotated_result["result"])
             if ocr_results:
-                text = " ".join([res[1] for res in ocr_results])
+                text = " ".join(r[1] for r in ocr_results)
                 all_ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
 
         if not all_ocr_text.strip():

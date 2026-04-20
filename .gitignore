@@ -11,6 +11,7 @@ venv/
 *.egg-info/
 
 # Backend temporary files
+android_backend/.env
 android_backend/temp_images/*
 !android_backend/temp_images/.gitkeep
 android_backend/test.jpg
