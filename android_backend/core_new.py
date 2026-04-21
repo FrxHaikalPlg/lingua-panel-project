@@ -272,21 +272,21 @@ def translate_chapter(pages_ocr: dict, source_lang="Japanese", target_lang="Engl
                 )},
             ],
             "temperature": 0.8,
-            "max_tokens": 16000,
+            "max_tokens": 8000,  # DeepSeek-V3 hard limit is 8192
         }
 
         try:
             response = requests.post(DEEPSEEK_API_URL, headers=headers, json=data)
-            response.raise_for_status()
+            if not response.ok:
+                print(f"[translate_chapter] API error {response.status_code}: {response.text[:300]}")
+                response.raise_for_status()
             raw = response.json()["choices"][0]["message"]["content"]
             chunk_result = _parse_chapter_response(raw, [pi for pi, _ in chunk])
             result.update(chunk_result)
         except requests.exceptions.RequestException as e:
             print(f"Chapter translation API error (chunk {chunk_start}): {e}")
-            # Fallback: mark all pages in this chunk as failed
             for page_idx, _ in chunk:
-                result[page_idx] = f"[Translation Failed for page {page_idx + 1}]"
-
+                result[page_idx] = ""
     return result
 
 
@@ -299,31 +299,39 @@ def _parse_chapter_response(raw: str, expected_page_indices: list) -> dict:
         translated...
         [Page #2]
         ...
-    Returns dict: {page_idx (0-based): text_block_with_[TextArea#N]_markers}
+    Falls back gracefully when DeepSeek omits [Page #N] markers.
     """
     result: dict[int, str] = {}
     current_page_idx = None
     current_lines: list[str] = []
 
     for line in raw.split("\n"):
-        if line.startswith("[Page #") and "]" in line:
-            # Save previous page
+        # Handle both "[Page #1]" alone and "[Page #1][Text Area #1]..." on same line
+        stripped = line.strip()
+        if stripped.startswith("[Page #") and "]" in stripped:
             if current_page_idx is not None:
                 result[current_page_idx] = "\n".join(current_lines).strip()
             try:
-                page_num = int(line.split("#")[1].split("]")[0])
-                current_page_idx = page_num - 1  # convert to 0-based
-                current_lines = []
+                page_num = int(stripped.split("#")[1].split("]")[0])
+                current_page_idx = page_num - 1
+                # If the rest of the line has more content (e.g. [Text Area #1]), keep it
+                rest = stripped[stripped.index("]") + 1:].strip()
+                current_lines = [rest] if rest else []
             except (ValueError, IndexError):
                 current_page_idx = None
         elif current_page_idx is not None:
             current_lines.append(line)
 
-    # Save last page
     if current_page_idx is not None:
         result[current_page_idx] = "\n".join(current_lines).strip()
 
-    # Fill missing pages with empty string (no translation)
+    # Fallback: if no [Page #N] markers found but we have exactly 1 expected page,
+    # treat the entire response as that page's translation.
+    if not result and len(expected_page_indices) == 1:
+        print("[_parse_chapter_response] No [Page #N] markers found. Using full response as page 1.")
+        result[expected_page_indices[0]] = raw.strip()
+
+    # Fill missing pages with empty string
     for pi in expected_page_indices:
         result.setdefault(pi, "")
 
