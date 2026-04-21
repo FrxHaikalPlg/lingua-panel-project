@@ -265,24 +265,20 @@ def _fit_text_in_bubble(
     return font, lines, 11
 
 
-def draw_translated_text(pil_image: Image.Image, bbox: list, text: str) -> Image.Image:
-    """
-    White out a bubble region and draw translated text centered inside it.
-    Uses Pillow for crisp, anti-aliased rendering.
-    """
+def _draw_bubble_background(overlay_draw: ImageDraw.ImageDraw, bbox: list):
+    """Draw a white rounded-rectangle background for a bubble onto an RGBA overlay."""
     x1, y1, x2, y2 = bbox
-    bw = x2 - x1
-    bh = y2 - y1
+    bw, bh = x2 - x1, y2 - y1
+    radius = min(bw, bh) // 6
+    overlay_draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=(255, 255, 255, 230))
+
+
+def _draw_bubble_text(draw: ImageDraw.ImageDraw, bbox: list, text: str):
+    """Draw translated text centered inside a bubble (no background — drawn separately)."""
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
     padding = max(6, min(bw, bh) // 12)
 
-    # White-out the bubble with a soft rounded rectangle
-    overlay = Image.new("RGBA", pil_image.size, (0, 0, 0, 0))
-    ov_draw = ImageDraw.Draw(overlay)
-    radius = min(bw, bh) // 6
-    ov_draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=(255, 255, 255, 230))
-    pil_image = Image.alpha_composite(pil_image.convert("RGBA"), overlay).convert("RGB")
-
-    draw = ImageDraw.Draw(pil_image)
     font, lines, line_h = _fit_text_in_bubble(draw, text, bbox, padding)
 
     total_text_h = line_h * len(lines)
@@ -295,8 +291,6 @@ def draw_translated_text(pil_image: Image.Image, bbox: list, text: str) -> Image
         # Subtle shadow for readability
         draw.text((tx + 1, ty + 1), line, font=font, fill=(180, 180, 180))
         draw.text((tx, ty), line, font=font, fill=(20, 20, 20))
-
-    return pil_image
 
 
 def create_translated_panel(image_bgr, crops, translated_text):
@@ -322,12 +316,27 @@ def create_translated_panel(image_bgr, crops, translated_text):
         translation_by_area[current_area] = " ".join(" ".join(current_text).split())
 
     # Convert BGR → PIL RGBA for compositing
-    pil_image = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+    pil_image = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
 
-    for idx, text_to_draw in translation_by_area.items():
-        if idx >= len(crops) or not text_to_draw.strip():
-            continue
-        pil_image = draw_translated_text(pil_image, crops[idx]["bbox"], text_to_draw)
+    # --- Pass 1: Draw ALL white backgrounds first ---
+    # Using a single shared overlay so all backgrounds are composited together
+    # before any text is drawn. This prevents adjacent bubbles from covering
+    # each other's text.
+    bg_overlay = Image.new("RGBA", pil_image.size, (0, 0, 0, 0))
+    bg_draw = ImageDraw.Draw(bg_overlay)
+    valid_entries = [
+        (idx, text_to_draw)
+        for idx, text_to_draw in translation_by_area.items()
+        if idx < len(crops) and text_to_draw.strip()
+    ]
+    for idx, _ in valid_entries:
+        _draw_bubble_background(bg_draw, crops[idx]["bbox"])
+    pil_image = Image.alpha_composite(pil_image, bg_overlay).convert("RGB")
+
+    # --- Pass 2: Draw ALL text on top ---
+    text_draw = ImageDraw.Draw(pil_image)
+    for idx, text_to_draw in valid_entries:
+        _draw_bubble_text(text_draw, crops[idx]["bbox"], text_to_draw)
 
     # Convert back to BGR numpy array
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
