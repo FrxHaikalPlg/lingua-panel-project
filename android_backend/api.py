@@ -12,7 +12,13 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from typing import List
 
-from core_new import run_translation_pipeline
+from core_new import (
+    run_translation_pipeline,
+    detect_and_ocr_page,
+    translate_chapter,
+    apply_translation_overlay,
+    init_reader,
+)
 from job_manager import job_manager, JOBS_DIR
 
 app = FastAPI(title="LinguaPanel API", version="2.0.0")
@@ -82,46 +88,81 @@ def _run_single_job(job_id: str, image_path: str, lang: str):
 
 
 def _run_chapter_job(job_id: str, image_paths: list[str], lang: str):
-    """Background worker for chapter (multi-page) translation job."""
+    """
+    Background worker for chapter translation — 3-phase pipeline:
+      Phase 1: Detect + OCR all pages  (sequential, shows scanning progress)
+      Phase 2: Translate all pages     (1 batched DeepSeek call)
+      Phase 3: Render overlays         (sequential, results appear progressively)
+    """
     total = len(image_paths)
+    # Progress buckets: each page gets 2 steps (OCR + render); translation = 1 shared step
+    TOTAL_STEPS = total * 2 + 1
 
-    def page_progress(message: str, step: int, step_total: int, page_idx: int):
-        # Map 4 pipeline steps → fractional progress within the page
-        overall_step = page_idx * 4 + step
-        overall_total = total * 4
-        full_msg = f"Page {page_idx + 1}/{total} — {message}"
-        job_manager.update(job_id, message=full_msg, progress=overall_step,
-                           total=overall_total, status="running")
+    def _upd(step: int, message: str):
+        job_manager.update(job_id, progress=step, total=TOTAL_STEPS,
+                           message=message, status="running")
 
     try:
+        reader = init_reader([lang])
+
+        # ------------------------------------------------------------------
+        # Phase 1: Detect + OCR all pages
+        # ------------------------------------------------------------------
+        pages_crops: list = []   # crops per page (list of crop dicts)
+        pages_ocr: dict = {}     # {page_idx: ocr_text_block}
+
         for page_idx, image_path in enumerate(image_paths):
+            _upd(page_idx, f"Scanning page {page_idx + 1}/{total}...")
+            work_dir = os.path.join(TEMP_DIR, f"work_{job_id}_{page_idx}")
+            os.makedirs(work_dir, exist_ok=True)
+
+            crops, ocr_text = detect_and_ocr_page(image_path, reader, work_dir)
+            pages_crops.append(crops)
+            if ocr_text.strip():
+                pages_ocr[page_idx] = ocr_text
+
+        # ------------------------------------------------------------------
+        # Phase 2: Translate all pages in one batched API call
+        # ------------------------------------------------------------------
+        _upd(total, f"Translating {total} pages...")
+        translations: dict = {}
+        if pages_ocr:
+            translations = translate_chapter(pages_ocr)
+
+        # ------------------------------------------------------------------
+        # Phase 3: Render overlays — results become available page by page
+        # ------------------------------------------------------------------
+        for page_idx, image_path in enumerate(image_paths):
+            render_step = total + 1 + page_idx
+            _upd(render_step, f"Rendering page {page_idx + 1}/{total}...")
+
             ext = os.path.splitext(image_path)[1].lower()
             result_filename = f"page_{page_idx + 1:03d}{ext}"
             output_path = os.path.join(job_manager.get(job_id).result_dir, result_filename)
 
-            cb = lambda msg, step, stotal, i=page_idx: page_progress(msg, step, stotal, i)
-
-            run_translation_pipeline(
-                image_path,
-                lang=lang,
-                progress_callback=cb,
-                output_path=output_path,
+            translated_text = translations.get(page_idx, "")
+            apply_translation_overlay(
+                image_path, pages_crops[page_idx], translated_text, output_path
             )
 
             job_manager.append_result(job_id, page=page_idx + 1, filename=result_filename)
             _delete(image_path)
 
-        job_manager.update(job_id, status="done",
-                           progress=total * 4, total=total * 4,
+        job_manager.update(job_id, status="done", progress=TOTAL_STEPS, total=TOTAL_STEPS,
                            message=f"Done! {total} pages translated.")
 
     except Exception as e:
         print(f"[Job {job_id}] Error: {e}")
         job_manager.update(job_id, status="failed", error=str(e))
     finally:
-        # Clean up any remaining temp input files
         for p in image_paths:
             _delete(p)
+        # Cleanup work dirs
+        for page_idx in range(total):
+            work_dir = os.path.join(TEMP_DIR, f"work_{job_id}_{page_idx}")
+            if os.path.exists(work_dir):
+                shutil.rmtree(work_dir, ignore_errors=True)
+
 
 
 # ---------------------------------------------------------------------------

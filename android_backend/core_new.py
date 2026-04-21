@@ -188,8 +188,21 @@ Rules:
 - Preserve the [Text Area #N] markers exactly as given in your output
 - Return only the translated text with [Text Area #N] markers, nothing else"""
 
+SYSTEM_PROMPT_CHAPTER = """You are a professional manga translator specializing in Japanese-to-English localization.
 
-def translate_text(text, source_lang="Japanese", target_lang="English"):
+The source text spans multiple pages of a manga chapter. Each page is marked with [Page #N] and each bubble with [Text Area #N]. Text comes from OCR and may contain recognition errors.
+
+Rules:
+- Use casual, natural English — manga characters speak informally, not formally
+- Preserve emotional tone and intensity across the whole chapter
+- Use consistent character names and speech patterns throughout all pages
+- Transliterate or translate sound effects/onomatopoeia naturally
+- If a text area is too garbled, make your best inference — never skip or output "N/A"
+- Preserve BOTH [Page #N] and [Text Area #N] markers exactly in your output
+- Return only the translated text with markers, nothing else"""
+
+
+def translate_text(text, source_lang="Japanese", target_lang="English", max_tokens=8000):
     """Translate OCR text using the DeepSeek API with a manga-optimized prompt."""
     if not DEEPSEEK_API_KEY:
         raise ValueError("DEEPSEEK_API_KEY not configured")
@@ -205,6 +218,7 @@ def translate_text(text, source_lang="Japanese", target_lang="English"):
             {"role": "user", "content": f"Translate the following {source_lang} manga text to {target_lang}:\n\n{text}"},
         ],
         "temperature": 0.8,
+        "max_tokens": max_tokens,
     }
 
     try:
@@ -214,6 +228,106 @@ def translate_text(text, source_lang="Japanese", target_lang="English"):
     except requests.exceptions.RequestException as e:
         print(f"Translation API error: {e}")
         return f"[Translation Failed] {text}"
+
+
+CHAPTER_BATCH_SIZE = 20  # max pages per DeepSeek call
+
+
+def translate_chapter(pages_ocr: dict, source_lang="Japanese", target_lang="English") -> dict:
+    """
+    Translate OCR text from multiple pages in a single (or chunked) API call.
+
+    Args:
+        pages_ocr: dict mapping page_index (0-based) -> ocr_text_block
+                   e.g. {0: "[Text Area #1]\nhoge\n", 1: "[Text Area #1]\nfoo\n"}
+    Returns:
+        dict mapping page_index -> translated_text_block (same [Text Area #N] format)
+    """
+    if not DEEPSEEK_API_KEY:
+        raise ValueError("DEEPSEEK_API_KEY not configured")
+
+    sorted_pages = sorted(pages_ocr.items())  # [(page_idx, ocr_text), ...]
+    result: dict[int, str] = {}
+
+    # Auto-chunk if more than CHAPTER_BATCH_SIZE pages
+    for chunk_start in range(0, len(sorted_pages), CHAPTER_BATCH_SIZE):
+        chunk = sorted_pages[chunk_start: chunk_start + CHAPTER_BATCH_SIZE]
+
+        # Build multi-page prompt block
+        prompt_block = ""
+        for page_idx, ocr_text in chunk:
+            prompt_block += f"[Page #{page_idx + 1}]\n{ocr_text}\n"
+
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_CHAPTER},
+                {"role": "user", "content": (
+                    f"Translate the following {source_lang} manga chapter excerpt to {target_lang}.\n"
+                    f"Maintain consistent character voices across all pages.\n\n{prompt_block}"
+                )},
+            ],
+            "temperature": 0.8,
+            "max_tokens": 16000,
+        }
+
+        try:
+            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=data)
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"]
+            chunk_result = _parse_chapter_response(raw, [pi for pi, _ in chunk])
+            result.update(chunk_result)
+        except requests.exceptions.RequestException as e:
+            print(f"Chapter translation API error (chunk {chunk_start}): {e}")
+            # Fallback: mark all pages in this chunk as failed
+            for page_idx, _ in chunk:
+                result[page_idx] = f"[Translation Failed for page {page_idx + 1}]"
+
+    return result
+
+
+def _parse_chapter_response(raw: str, expected_page_indices: list) -> dict:
+    """
+    Parse a multi-page DeepSeek response into per-page text blocks.
+    Expected format:
+        [Page #1]
+        [Text Area #1]
+        translated...
+        [Page #2]
+        ...
+    Returns dict: {page_idx (0-based): text_block_with_[TextArea#N]_markers}
+    """
+    result: dict[int, str] = {}
+    current_page_idx = None
+    current_lines: list[str] = []
+
+    for line in raw.split("\n"):
+        if line.startswith("[Page #") and "]" in line:
+            # Save previous page
+            if current_page_idx is not None:
+                result[current_page_idx] = "\n".join(current_lines).strip()
+            try:
+                page_num = int(line.split("#")[1].split("]")[0])
+                current_page_idx = page_num - 1  # convert to 0-based
+                current_lines = []
+            except (ValueError, IndexError):
+                current_page_idx = None
+        elif current_page_idx is not None:
+            current_lines.append(line)
+
+    # Save last page
+    if current_page_idx is not None:
+        result[current_page_idx] = "\n".join(current_lines).strip()
+
+    # Fill missing pages with empty string (no translation)
+    for pi in expected_page_indices:
+        result.setdefault(pi, "")
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -342,19 +456,85 @@ def create_translated_panel(image_bgr, crops, translated_text):
     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
 # ---------------------------------------------------------------------------
-# Main pipeline
+# Chapter pipeline helpers (used by api.py job worker)
+# ---------------------------------------------------------------------------
+
+def detect_and_ocr_page(image_path: str, reader, work_dir: str) -> tuple:
+    """
+    Run bubble detection + OCR for a single page.
+
+    Returns:
+        (crops, ocr_text) where:
+        - crops: list of crop dicts (bbox, path, image)
+        - ocr_text: formatted string with [Text Area #N] markers, or "" if nothing found
+    """
+    temp_crop_dir = os.path.join(work_dir, "crops")
+    temp_proc_dir = os.path.join(work_dir, "processed")
+    os.makedirs(temp_crop_dir, exist_ok=True)
+    os.makedirs(temp_proc_dir, exist_ok=True)
+
+    crops = process_manga_page(image_path, temp_crop_dir)
+    ocr_text = ""
+
+    for idx, crop_info in enumerate(crops):
+        processed_path = os.path.join(temp_proc_dir, f"p_{idx}.jpg")
+        rotated_result = process_image_with_rotation(crop_info["path"], processed_path)
+        if not rotated_result:
+            continue
+
+        ocr_results = perform_ocr(reader, rotated_result["result"])
+        if not ocr_results:
+            ocr_results = perform_ocr(reader, crop_info["image"])
+
+        if ocr_results:
+            text = " ".join(r[1] for r in ocr_results)
+            ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
+
+    # Cleanup intermediate crops
+    shutil.rmtree(temp_crop_dir, ignore_errors=True)
+    shutil.rmtree(temp_proc_dir, ignore_errors=True)
+
+    return crops, ocr_text
+
+
+def apply_translation_overlay(image_path: str, crops: list, translated_text: str, output_path: str) -> str:
+    """
+    Apply translated text overlay onto a manga page and save the result.
+
+    Args:
+        image_path:       Path to the original input image.
+        crops:            Crop list returned by detect_and_ocr_page.
+        translated_text:  Translated text block with [Text Area #N] markers.
+        output_path:      Where to save the result.
+    Returns:
+        output_path
+    """
+    image = cv2.imread(image_path)
+    if image is None:
+        raise FileNotFoundError(f"Cannot read image: {image_path}")
+
+    if not translated_text.strip() or not crops:
+        cv2.imwrite(output_path, image)
+        return output_path
+
+    final = create_translated_panel(image, crops, translated_text)
+    cv2.imwrite(output_path, final)
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# Single-image pipeline (used by /jobs/image and /translate_image)
 # ---------------------------------------------------------------------------
 
 def run_translation_pipeline(image_path, lang="ja", progress_callback=None, output_path=None):
     """
-    Orchestrate the full manga translation pipeline.
+    Orchestrate the full manga translation pipeline for a single image.
 
     Args:
         image_path:        Path to the input image.
         lang:              EasyOCR source language code.
-        progress_callback: Optional callable(message, step, total) for progress reporting.
-        output_path:       Where to save the translated image. Defaults to
-                           translated_{filename} in the same directory.
+        progress_callback: Optional callable(message, step, total).
+        output_path:       Where to save result (default: translated_{filename}).
     """
     def _report(message: str, step: int, total: int):
         if progress_callback:
@@ -376,7 +556,6 @@ def run_translation_pipeline(image_path, lang="ja", progress_callback=None, outp
             print("No text bubbles detected.")
             return image_path
 
-        # Collect OCR text from all bubbles (sent together for page-level context)
         _report("Running OCR...", 2, 4)
         all_ocr_text = ""
         for idx, crop_info in enumerate(bubble_crops):
@@ -389,7 +568,6 @@ def run_translation_pipeline(image_path, lang="ja", progress_callback=None, outp
 
             ocr_results = perform_ocr(reader, rotated_result["result"])
             if not ocr_results:
-                # All strategies on rotated result failed — try original crop as last resort
                 ocr_results = perform_ocr(reader, crop_info["image"])
 
             if ocr_results:
