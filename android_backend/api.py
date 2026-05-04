@@ -27,7 +27,7 @@ TEMP_DIR = "temp_images"
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(JOBS_DIR, exist_ok=True)
 
-ALLOWED_EXTS = {".png", ".jpg", ".jpeg"}
+ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ def _make_progress_callback(job_id: str):
 # Background workers
 # ---------------------------------------------------------------------------
 
-def _run_single_job(job_id: str, image_path: str, lang: str):
+def _run_single_job(job_id: str, image_path: str, lang: str, orientation: str = "vertical"):
     """Background worker for single-image translation job."""
     try:
         result_filename = f"page_1{os.path.splitext(image_path)[1]}"
@@ -87,7 +87,7 @@ def _run_single_job(job_id: str, image_path: str, lang: str):
         _delete(image_path)
 
 
-def _run_chapter_job(job_id: str, image_paths: list[str], lang: str):
+def _run_chapter_job(job_id: str, image_paths: list[str], lang: str, orientation: str = "vertical"):
     """
     Background worker for chapter translation — 3-phase pipeline:
       Phase 1: Detect + OCR all pages  (sequential, shows scanning progress)
@@ -116,7 +116,7 @@ def _run_chapter_job(job_id: str, image_paths: list[str], lang: str):
             work_dir = os.path.join(TEMP_DIR, f"work_{job_id}_{page_idx}")
             os.makedirs(work_dir, exist_ok=True)
 
-            crops, ocr_text = detect_and_ocr_page(image_path, reader, work_dir)
+            crops, ocr_text = detect_and_ocr_page(image_path, reader, work_dir, orientation=orientation)
             pages_crops.append(crops)
             if ocr_text.strip():
                 pages_ocr[page_idx] = ocr_text
@@ -178,6 +178,7 @@ def read_root():
 @app.post("/translate_image", summary="Quick single-image translate (synchronous)")
 async def translate_image(
     lang: str = Query("ja", description="Source language for OCR"),
+    orientation: str = Query("vertical", description="Text orientation: 'vertical' (manga/manhua) or 'horizontal' (manhwa)"),
     file: UploadFile = File(...),
 ):
     """
@@ -219,6 +220,7 @@ async def translate_image(
 @app.post("/jobs/image", summary="Translate single image (async job)")
 async def create_image_job(
     lang: str = Query("ja", description="Source language for OCR"),
+    orientation: str = Query("vertical", description="Text orientation: 'vertical' (manga/manhua) or 'horizontal' (manhwa)"),
     file: UploadFile = File(...),
 ):
     """
@@ -237,7 +239,7 @@ async def create_image_job(
     job = job_manager.create(total_steps=4)
     threading.Thread(
         target=_run_single_job,
-        args=(job.id, file_path, lang),
+        args=(job.id, file_path, lang, orientation),
         daemon=True,
     ).start()
 
@@ -247,7 +249,9 @@ async def create_image_job(
 @app.post("/jobs/chapter", summary="Translate multiple pages (async job)")
 async def create_chapter_job(
     lang: str = Query("ja", description="Source language for OCR"),
+    orientation: str = Query("vertical", description="Text orientation: 'vertical' (manga/manhua) or 'horizontal' (manhwa)"),
     files: List[UploadFile] = File(...),
+
 ):
     """
     Creates a background translation job for a chapter.
@@ -299,7 +303,7 @@ async def create_chapter_job(
     job = job_manager.create(total_steps=len(image_paths) * 4)
     threading.Thread(
         target=_run_chapter_job,
-        args=(job.id, image_paths, lang),
+        args=(job.id, image_paths, lang, orientation),
         daemon=True,
     ).start()
 

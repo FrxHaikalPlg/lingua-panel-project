@@ -152,10 +152,13 @@ def process_image_with_rotation(image_path, output_path):
     return {"result": result_image, "letters": letters_detected}
 
 
-def process_manga_page(image_path, output_base_dir):
+def process_manga_page(image_path, output_base_dir, orientation="vertical"):
     """
-    Detect text bubbles, crop each one, and return in manga reading order
-    (right-to-left, top-to-bottom).
+    Detect text bubbles, crop each one, and return in reading order.
+
+    Args:
+        orientation: "vertical" (manga/manhua — rotate CCW) or
+                     "horizontal" (manhwa — crop directly, no rotation)
     """
     os.makedirs(output_base_dir, exist_ok=True)
 
@@ -174,25 +177,34 @@ def process_manga_page(image_path, output_base_dir):
         and p["width"] >= 20 and p["height"] >= 20
     ]
 
-
-    # Sort in manga reading order: top-to-bottom primary, right-to-left secondary
-    # Divide page into horizontal bands (roughly 1/5 of page height each)
+    # Reading order depends on orientation:
+    # vertical (manga/manhua): right-to-left, top-to-bottom
+    # horizontal (manhwa):     left-to-right, top-to-bottom
     band_height = max(1, image.shape[0] // 5)
-    bubbles.sort(key=lambda p: (p["y1"] // band_height, -(p["x1"] + p["x2"]) / 2))
+    if orientation == "horizontal":
+        bubbles.sort(key=lambda p: (p["y1"] // band_height, (p["x1"] + p["x2"]) / 2))
+    else:
+        bubbles.sort(key=lambda p: (p["y1"] // band_height, -(p["x1"] + p["x2"]) / 2))
 
     crops = []
     for idx, pred in enumerate(bubbles):
         x1, y1, x2, y2 = pred["x1"], pred["y1"], pred["x2"], pred["y2"]
-
         cropped = image[y1:y2, x1:x2]
-        rotated = cv2.rotate(cropped, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        final_crop = invert_if_needed(rotated)
+
+        if orientation == "horizontal":
+            # Manhwa: text is already horizontal, no rotation needed
+            final_crop = invert_if_needed(cropped)
+        else:
+            # Manga/Manhua: vertical text → rotate CCW to make it horizontal
+            rotated = cv2.rotate(cropped, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            final_crop = invert_if_needed(rotated)
 
         crop_path = os.path.join(output_base_dir, f"crop_{idx}.jpg")
         cv2.imwrite(crop_path, final_crop)
         crops.append({"path": crop_path, "bbox": [x1, y1, x2, y2], "image": final_crop})
 
     return crops
+
 
 
 # ---------------------------------------------------------------------------
@@ -550,14 +562,14 @@ def create_translated_panel(image_bgr, crops, translated_text):
 # Chapter pipeline helpers (used by api.py job worker)
 # ---------------------------------------------------------------------------
 
-def detect_and_ocr_page(image_path: str, reader, work_dir: str) -> tuple:
+def detect_and_ocr_page(image_path: str, reader, work_dir: str, orientation: str = "vertical") -> tuple:
     """
     Run bubble detection + OCR for a single page.
 
-    Strategy:
-    - Bubble detection:    sequential (1 call on full page)
-    - Character rotation:  PARALLEL   (ONNX releases GIL → thread-safe)
-    - OCR:                 sequential (EasyOCR reader not thread-safe)
+    Args:
+        orientation: "vertical" (manga/manhua) or "horizontal" (manhwa).
+          - vertical:   bubble crop → character rotation (parallel) → OCR
+          - horizontal: bubble crop → OCR directly (skip rotation)
 
     Returns:
         (crops, ocr_text)
@@ -567,44 +579,50 @@ def detect_and_ocr_page(image_path: str, reader, work_dir: str) -> tuple:
     os.makedirs(temp_crop_dir, exist_ok=True)
     os.makedirs(temp_proc_dir, exist_ok=True)
 
-    crops = process_manga_page(image_path, temp_crop_dir)
+    crops = process_manga_page(image_path, temp_crop_dir, orientation=orientation)
 
     if not crops:
         return crops, ""
 
-    # --- Parallel character rotation ---
-    # ONNX Runtime releases the Python GIL during inference, so multiple
-    # bubble crops can be processed concurrently on separate CPU threads.
-    def _rotate(args):
-        idx, crop_info = args
-        processed_path = os.path.join(temp_proc_dir, f"p_{idx}.jpg")
-        return idx, process_image_with_rotation(crop_info["path"], processed_path)
-
-    n_workers = min(4, len(crops))
-    with ThreadPoolExecutor(max_workers=n_workers) as executor:
-        rotation_results = dict(executor.map(_rotate, enumerate(crops)))
-
-    # --- Sequential OCR ---
     ocr_text = ""
 
-    for idx, crop_info in enumerate(crops):
-        rotated_result = rotation_results.get(idx)
-        if not rotated_result:
-            continue
-
-        ocr_results = perform_ocr(reader, rotated_result["result"])
-        if not ocr_results:
+    if orientation == "horizontal":
+        # ── Horizontal (manhwa): OCR directly on bubble crops ──────────────
+        for idx, crop_info in enumerate(crops):
             ocr_results = perform_ocr(reader, crop_info["image"])
+            if ocr_results:
+                text = " ".join(r[1] for r in ocr_results)
+                ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
+    else:
+        # ── Vertical (manga/manhua): parallel character rotation → OCR ────
+        def _rotate(args):
+            idx, crop_info = args
+            processed_path = os.path.join(temp_proc_dir, f"p_{idx}.jpg")
+            return idx, process_image_with_rotation(crop_info["path"], processed_path)
 
-        if ocr_results:
-            text = " ".join(r[1] for r in ocr_results)
-            ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
+        n_workers = min(4, len(crops))
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            rotation_results = dict(executor.map(_rotate, enumerate(crops)))
+
+        for idx, crop_info in enumerate(crops):
+            rotated_result = rotation_results.get(idx)
+            if not rotated_result:
+                continue
+
+            ocr_results = perform_ocr(reader, rotated_result["result"])
+            if not ocr_results:
+                ocr_results = perform_ocr(reader, crop_info["image"])
+
+            if ocr_results:
+                text = " ".join(r[1] for r in ocr_results)
+                ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
 
     # Cleanup intermediate crops
     shutil.rmtree(temp_crop_dir, ignore_errors=True)
     shutil.rmtree(temp_proc_dir, ignore_errors=True)
 
     return crops, ocr_text
+
 
 
 
