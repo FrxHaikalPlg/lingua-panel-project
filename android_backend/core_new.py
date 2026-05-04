@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 import os
 import shutil
-import textwrap
+import time
+from concurrent.futures import ThreadPoolExecutor
 import easyocr
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -24,60 +25,81 @@ _FONT_BOLD = os.path.join(_FONT_DIR, "NotoSans-Bold.ttf")
 # OCR
 # ---------------------------------------------------------------------------
 
-def init_reader(languages=["ja", "en"]):
-    """Initialize and return an EasyOCR reader."""
-    print(f"Initializing EasyOCR reader with languages: {languages}")
-    return easyocr.Reader(languages)
+_reader_cache: dict = {}
+
+
+def get_reader(lang: str = "ja") -> easyocr.Reader:
+    """
+    Return a cached EasyOCR reader for the given language.
+    Initialized lazily on first call; subsequent calls return the same instance.
+    """
+    if lang not in _reader_cache:
+        print(f"Initializing EasyOCR reader for language: {lang}")
+        _reader_cache[lang] = easyocr.Reader([lang])
+    return _reader_cache[lang]
 
 
 def _ocr_raw(reader, image):
-    """Run EasyOCR on a single image, returning results above confidence threshold."""
+    """Run EasyOCR on a single image, returning results above confidence threshold.
+
+    Filter logic:
+      - Always accept if confidence >= OCR_CONFIDENCE_THRESHOLD
+      - Also accept low-confidence results with more than 1 character
+        (multi-char detections are almost never noise)
+      - Reject only: confidence < threshold AND single character
+    """
     if image is None:
         return []
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    return [r for r in reader.readtext(rgb) if r[2] >= OCR_CONFIDENCE_THRESHOLD]
+    return [
+        r for r in reader.readtext(rgb)
+        if r[2] >= OCR_CONFIDENCE_THRESHOLD or len(r[1].strip()) > 1
+    ]
 
 
-def perform_ocr(reader, image):
+def perform_ocr(reader, image, thorough: bool = False):
     """
-    Run OCR with multiple preprocessing fallbacks to maximize recall.
-    Tries in order:
-      1. Image as-is
-      2. CLAHE contrast enhancement
-      3. 2× upscale (helps with small text)
-      4. Otsu binarization
-    Returns results from the first strategy that yields output.
+    Run OCR on a preprocessed (rotated) bubble image.
+
+    Args:
+        thorough: If False (default), run OCR on the image as-is — fastest.
+                  If True, try up to 4 preprocessing strategies for maximum recall:
+                    1. Original  2. CLAHE  3. 2× upscale  4. Otsu binarization
+    Returns results from the first strategy that yields output, or [] if all fail.
     """
     if image is None:
         return []
 
+    if not thorough:
+        return _ocr_raw(reader, image)
+
+    # --- Thorough mode: try multiple preprocessing strategies ---
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    candidates = [
-        image,  # 1. original
-    ]
+    # 1. Original
+    results = _ocr_raw(reader, image)
+    if results:
+        return results
 
-    # 2. CLAHE (adaptive contrast enhancement)
+    # 2. CLAHE contrast enhancement
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
-    enhanced = clahe.apply(gray)
-    candidates.append(cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR))
+    enhanced = cv2.cvtColor(clahe.apply(gray), cv2.COLOR_GRAY2BGR)
+    results = _ocr_raw(reader, enhanced)
+    if results:
+        return results
 
-    # 3. Upscale 2× (helps when text is small)
+    # 3. 2× upscale (helps with small text)
     h, w = image.shape[:2]
     if max(h, w) < 300:
         up = cv2.resize(image, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-        candidates.append(up)
-
-    # 4. Otsu binarization
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    candidates.append(cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR))
-
-    for img in candidates:
-        results = _ocr_raw(reader, img)
+        results = _ocr_raw(reader, up)
         if results:
             return results
 
-    return []
+    # 4. Otsu binarization
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return _ocr_raw(reader, cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR))
+
 
 
 # ---------------------------------------------------------------------------
@@ -143,12 +165,13 @@ def process_manga_page(image_path, output_base_dir):
 
     img_w = image.shape[1]
     detector = get_bubble_detector()
-    predictions = detector.predict(image_path, confidence_threshold=0.25)
+    predictions = detector.predict(image_path, confidence_threshold=0.5)
 
-    # Filter to text_bubble class only, skip tiny detections
+    # Accept both text_bubble and text_free classes, skip tiny detections
     bubbles = [
         p for p in predictions
-        if p["class"] == "text_bubble" and p["width"] >= 20 and p["height"] >= 20
+        if p["class"] in ("text_bubble", "text_free")
+        and p["width"] >= 20 and p["height"] >= 20
     ]
 
 
@@ -230,7 +253,7 @@ def translate_text(text, source_lang="Japanese", target_lang="English", max_toke
         return f"[Translation Failed] {text}"
 
 
-CHAPTER_BATCH_SIZE = 20  # max pages per DeepSeek call
+CHAPTER_BATCH_SIZE = 15  # max pages per DeepSeek call
 
 
 def translate_chapter(pages_ocr: dict, source_lang="Japanese", target_lang="English") -> dict:
@@ -275,18 +298,37 @@ def translate_chapter(pages_ocr: dict, source_lang="Japanese", target_lang="Engl
             "max_tokens": 8000,  # DeepSeek-V3 hard limit is 8192
         }
 
-        try:
-            response = requests.post(DEEPSEEK_API_URL, headers=headers, json=data)
-            if not response.ok:
-                print(f"[translate_chapter] API error {response.status_code}: {response.text[:300]}")
-                response.raise_for_status()
-            raw = response.json()["choices"][0]["message"]["content"]
-            chunk_result = _parse_chapter_response(raw, [pi for pi, _ in chunk])
-            result.update(chunk_result)
-        except requests.exceptions.RequestException as e:
-            print(f"Chapter translation API error (chunk {chunk_start}): {e}")
-            for page_idx, _ in chunk:
-                result[page_idx] = ""
+        # Retry up to 3 times with exponential backoff on 504 / timeout
+        MAX_RETRIES = 3
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = requests.post(
+                    DEEPSEEK_API_URL, headers=headers, json=data, timeout=90
+                )
+                if not response.ok:
+                    print(f"[translate_chapter] API error {response.status_code}: {response.text[:200]}")
+                    response.raise_for_status()
+                raw = response.json()["choices"][0]["message"]["content"]
+                chunk_result = _parse_chapter_response(raw, [pi for pi, _ in chunk])
+                result.update(chunk_result)
+                break  # success — exit retry loop
+
+            except requests.exceptions.RequestException as e:
+                is_last = (attempt == MAX_RETRIES - 1)
+                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s
+                if is_last:
+                    print(f"Chapter translation failed after {MAX_RETRIES} attempts (chunk {chunk_start}): {e}")
+                    # Last resort: translate each page individually
+                    for page_idx, ocr_text in chunk:
+                        try:
+                            translated = translate_text(ocr_text, source_lang, target_lang)
+                            result[page_idx] = translated
+                        except Exception:
+                            result[page_idx] = ""
+                else:
+                    print(f"[translate_chapter] attempt {attempt+1} failed, retrying in {wait}s… ({e})")
+                    time.sleep(wait)
+
     return result
 
 
@@ -348,7 +390,32 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     try:
         return ImageFont.truetype(font_path, size)
     except (IOError, OSError):
+        print(f"[FONT ERROR] Failed to load '{font_path}' at size={size} — using default")
         return ImageFont.load_default()
+
+
+def _wrap_text_pixels(draw, text: str, font, max_w: float) -> list:
+    """Word-wrap text so no line exceeds max_w pixels (actual measurement)."""
+    words = text.split()
+    if not words:
+        return []
+    space_w = draw.textlength(" ", font=font)
+    lines = []
+    current_words = []
+    current_w = 0.0
+    for word in words:
+        word_w = draw.textlength(word, font=font)
+        needed = current_w + (space_w + word_w if current_words else word_w)
+        if needed <= max_w or not current_words:
+            current_words.append(word)
+            current_w = needed
+        else:
+            lines.append(" ".join(current_words))
+            current_words = [word]
+            current_w = word_w
+    if current_words:
+        lines.append(" ".join(current_words))
+    return lines
 
 
 def _fit_text_in_bubble(
@@ -359,32 +426,48 @@ def _fit_text_in_bubble(
 ) -> tuple:
     """
     Find the largest font size where the wrapped text fits inside the bubble.
-    Returns (font, wrapped_lines).
+    Font range scales with bubble size so high-res images get proportionally
+    larger text instead of a fixed 8-20px cap.
+    Returns (font, wrapped_lines, line_height).
     """
     x1, y1, x2, y2 = bbox
-    max_w = (x2 - x1) - padding * 2
-    max_h = (y2 - y1) - padding * 2
+    bubble_w = x2 - x1
+    bubble_h = y2 - y1
+    max_w = bubble_w - padding * 2
+    max_h = bubble_h - padding * 2
 
-    for font_size in range(20, 7, -1):
-        font = _load_font(font_size, bold=False)
-        # Estimate chars per line from max_w and average char width
-        avg_char_w = font_size * 0.55
-        chars_per_line = max(1, int(max_w / avg_char_w))
-        lines = textwrap.wrap(text, width=chars_per_line)
+    if not text.strip():
+        return _load_font(10), [], 13
+
+    # Dynamic font range based on bubble dimensions
+    # Target: font ≈ bubble_height / 10, so ~5-6 lines fill the bubble
+    font_max = max(20, min(60, bubble_h // 8))
+    font_min = max(8, font_max // 3)
+
+    for font_size in range(font_max, font_min - 1, -1):
+        font   = _load_font(font_size, bold=False)
+        line_h = font_size + 4
+        lines  = _wrap_text_pixels(draw, text, font, max_w)
         if not lines:
             continue
-        # Measure actual rendered height
-        line_h = font_size + 3
         total_h = line_h * len(lines)
-        # Measure widest line
-        widest = max(draw.textlength(line, font=font) for line in lines)
+        widest  = max(draw.textlength(ln, font=font) for ln in lines)
         if total_h <= max_h and widest <= max_w:
             return font, lines, line_h
 
-    # Fallback: minimum font size, truncate lines
-    font = _load_font(8)
-    lines = textwrap.wrap(text, width=max(1, int(max_w / 5)))[:int(max_h / 11)]
-    return font, lines, 11
+    # Fallback: minimum font, truncate to available height
+    print(
+        f"[FONT FALLBACK] bbox={bbox} max_w={max_w:.0f} max_h={max_h:.0f} "
+        f"text_len={len(text)} text={text[:60]!r}"
+    )
+
+    font   = _load_font(8)
+    line_h = 11
+    lines  = _wrap_text_pixels(draw, text, font, max_w)
+    max_lines = max(1, int(max_h / line_h))
+    return font, lines[:max_lines], line_h
+
+
 
 
 def _draw_bubble_background(overlay_draw: ImageDraw.ImageDraw, bbox: list):
@@ -471,10 +554,13 @@ def detect_and_ocr_page(image_path: str, reader, work_dir: str) -> tuple:
     """
     Run bubble detection + OCR for a single page.
 
+    Strategy:
+    - Bubble detection:    sequential (1 call on full page)
+    - Character rotation:  PARALLEL   (ONNX releases GIL → thread-safe)
+    - OCR:                 sequential (EasyOCR reader not thread-safe)
+
     Returns:
-        (crops, ocr_text) where:
-        - crops: list of crop dicts (bbox, path, image)
-        - ocr_text: formatted string with [Text Area #N] markers, or "" if nothing found
+        (crops, ocr_text)
     """
     temp_crop_dir = os.path.join(work_dir, "crops")
     temp_proc_dir = os.path.join(work_dir, "processed")
@@ -482,11 +568,27 @@ def detect_and_ocr_page(image_path: str, reader, work_dir: str) -> tuple:
     os.makedirs(temp_proc_dir, exist_ok=True)
 
     crops = process_manga_page(image_path, temp_crop_dir)
+
+    if not crops:
+        return crops, ""
+
+    # --- Parallel character rotation ---
+    # ONNX Runtime releases the Python GIL during inference, so multiple
+    # bubble crops can be processed concurrently on separate CPU threads.
+    def _rotate(args):
+        idx, crop_info = args
+        processed_path = os.path.join(temp_proc_dir, f"p_{idx}.jpg")
+        return idx, process_image_with_rotation(crop_info["path"], processed_path)
+
+    n_workers = min(4, len(crops))
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        rotation_results = dict(executor.map(_rotate, enumerate(crops)))
+
+    # --- Sequential OCR ---
     ocr_text = ""
 
     for idx, crop_info in enumerate(crops):
-        processed_path = os.path.join(temp_proc_dir, f"p_{idx}.jpg")
-        rotated_result = process_image_with_rotation(crop_info["path"], processed_path)
+        rotated_result = rotation_results.get(idx)
         if not rotated_result:
             continue
 
@@ -503,6 +605,7 @@ def detect_and_ocr_page(image_path: str, reader, work_dir: str) -> tuple:
     shutil.rmtree(temp_proc_dir, ignore_errors=True)
 
     return crops, ocr_text
+
 
 
 def apply_translation_overlay(image_path: str, crops: list, translated_text: str, output_path: str) -> str:
@@ -553,7 +656,7 @@ def run_translation_pipeline(image_path, lang="ja", progress_callback=None, outp
     temp_processed_dir = os.path.join(base_dir, "temp_processed")
 
     try:
-        reader = init_reader([lang])
+        reader = get_reader(lang)
         original_image = cv2.imread(image_path)
         if original_image is None:
             raise FileNotFoundError("Original image not found or unreadable.")

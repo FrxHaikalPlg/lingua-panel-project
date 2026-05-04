@@ -17,7 +17,7 @@ from core_new import (
     detect_and_ocr_page,
     translate_chapter,
     apply_translation_overlay,
-    init_reader,
+    get_reader,
 )
 from job_manager import job_manager, JOBS_DIR
 
@@ -103,13 +103,13 @@ def _run_chapter_job(job_id: str, image_paths: list[str], lang: str):
                            message=message, status="running")
 
     try:
-        reader = init_reader([lang])
+        reader = get_reader(lang)
 
         # ------------------------------------------------------------------
         # Phase 1: Detect + OCR all pages
         # ------------------------------------------------------------------
-        pages_crops: list = []   # crops per page (list of crop dicts)
-        pages_ocr: dict = {}     # {page_idx: ocr_text_block}
+        pages_crops: list = []
+        pages_ocr: dict = {}
 
         for page_idx, image_path in enumerate(image_paths):
             _upd(page_idx, f"Scanning page {page_idx + 1}/{total}...")
@@ -150,6 +150,7 @@ def _run_chapter_job(job_id: str, image_paths: list[str], lang: str):
 
         job_manager.update(job_id, status="done", progress=TOTAL_STEPS, total=TOTAL_STEPS,
                            message=f"Done! {total} pages translated.")
+
 
     except Exception as e:
         print(f"[Job {job_id}] Error: {e}")

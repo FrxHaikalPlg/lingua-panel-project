@@ -1,5 +1,6 @@
 """
-ONNX inference module for RF-DETR bubble and character detection models.
+ONNX inference module for RF-DETR character detection model,
+and Ultralytics YOLO for bubble detection.
 """
 
 import cv2
@@ -168,23 +169,78 @@ class ONNXDetector:
 
 # Singleton model instances — loaded once on first use
 
-_bubble_detector: Optional[ONNXDetector] = None
+_bubble_detector = None
 _character_detector: Optional[ONNXDetector] = None
 
 
-def get_bubble_detector() -> ONNXDetector:
-    """Get or initialize the bubble detection model."""
+class YOLODetector:
+    """
+    Wrapper for Ultralytics YOLO model inference.
+    Outputs the same dict format as ONNXDetector so the rest of the
+    pipeline needs zero changes.
+    """
+
+    def __init__(self, model_path: str):
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model not found: {model_path}")
+        from ultralytics import YOLO
+        self.model = YOLO(model_path)
+        self.class_names = self.model.names  # dict {int: str}
+        print(
+            f"Loaded YOLO model: {os.path.basename(model_path)} "
+            f"({len(self.class_names)} classes: {list(self.class_names.values())})"
+        )
+
+    def predict(self, image_or_path, confidence_threshold: float = 0.15) -> List[Dict]:
+        """
+        Run detection and return list of dicts with keys:
+          class, class_id, confidence, x, y, width, height, x1, y1, x2, y2
+        """
+        results = self.model.predict(
+            source=image_or_path,
+            conf=confidence_threshold,
+            verbose=False,
+        )
+        predictions = []
+        for r in results:
+            for box in r.boxes:
+                x1, y1, x2, y2 = (int(v) for v in box.xyxy[0].tolist())
+                w  = x2 - x1
+                h  = y2 - y1
+                if w < 5 or h < 5:
+                    continue
+                cls_id = int(box.cls[0])
+                predictions.append({
+                    "class":      self.class_names.get(cls_id, f"class_{cls_id}"),
+                    "class_id":  cls_id,
+                    "confidence": float(box.conf[0]),
+                    "x":         (x1 + x2) // 2,
+                    "y":         (y1 + y2) // 2,
+                    "width":     w,
+                    "height":    h,
+                    "x1":        x1,
+                    "y1":        y1,
+                    "x2":        x2,
+                    "y2":        y2,
+                })
+        # Sort by confidence descending (consistent with ONNXDetector)
+        predictions.sort(key=lambda p: p["confidence"], reverse=True)
+        return predictions
+
+
+def get_bubble_detector() -> YOLODetector:
+    """Get or initialize the YOLO bubble detection model."""
     global _bubble_detector
     if _bubble_detector is None:
         model_path = os.path.join(
-            os.path.dirname(__file__), "models", "bubble_detection.onnx"
+            os.path.dirname(__file__), "models", "best.pt"
         )
-        _bubble_detector = ONNXDetector(model_path, BUBBLE_CLASSES)
+        _bubble_detector = YOLODetector(model_path)
     return _bubble_detector
 
 
 def get_character_detector() -> ONNXDetector:
-    """Get or initialize the character detection model."""
+    """Get or initialize the RF-DETR character detection model (ONNX)."""
     global _character_detector
     if _character_detector is None:
         model_path = os.path.join(

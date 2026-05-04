@@ -9,3 +9,4 @@ onnxruntime
 Pillow
 python-dotenv
 requests
+ultralytics

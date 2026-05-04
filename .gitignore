@@ -18,8 +18,16 @@ android_backend/temp_jobs/
 android_backend/test.jpg
 android_backend/translated_result.jpg
 
+# Test images & debug output (never commit these)
+android_backend/*.jpg
+android_backend/*.png
+android_backend/*.jpeg
+android_backend/debug_*/
+_debug_tools/
+
 # ML model files (too large for git, see README for setup)
 *.pth
+*.pt
 *.onnx
 android_backend/models/
 
