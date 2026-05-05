@@ -1,71 +1,79 @@
 # LinguaPanel — Manga Auto-Translation App
 
 <p align="center">
-  <strong>Translate manga panels instantly using AI-powered OCR and LLM translation.</strong>
+  <strong>Translate manga, manhwa, and manhua pages instantly using AI-powered OCR and LLM translation.</strong>
 </p>
 
-LinguaPanel is a full-stack manga translation tool. Users can pick a manga panel from their gallery, and the app automatically detects text bubbles, performs OCR, translates the text, and renders the translation back onto the image — all in one tap.
+LinguaPanel is a full-stack comic translation tool. Users upload manga pages, and the app automatically detects speech bubbles, performs OCR, translates the text, and renders the translation back onto the image — supporting both vertical (Japanese/Chinese) and horizontal (Korean) text orientations.
 
-## 🧩 How It Works
+## How It Works
 
 ```
-┌────────────┐    Upload Image    ┌─────────────────┐
-│  Flutter    │ ───────────────► │  FastAPI Backend │
-│  Mobile App │                   │                  │
-│             │ ◄─────────────── │  1. Roboflow     │
-│  • Auth     │  Translated Image │     (Bubble Det) │
-│  • History  │                   │  2. EasyOCR      │
-│  • Theming  │                   │  3. DeepSeek LLM │
-└────────────┘                   └─────────────────┘
-       │                                  │
-       └──── Firebase (Auth + Storage) ───┘
+┌─────────────┐                        ┌──────────────────────┐
+│  Flutter     │   Upload Pages        │  FastAPI Backend     │
+│  Mobile App  │ ────────────────────▶ │                      │
+│              │                        │  1. YOLOv11          │
+│  • Auth      │ ◀──────────────────── │     (Bubble Detect)  │
+│  • History   │   Translated Images   │  2. EasyOCR          │
+│  • Theming   │                        │  3. DeepSeek LLM     │
+└─────────────┘                        │  4. Pillow Overlay   │
+       │                                └──────────────────────┘
+       └──── Firebase (Auth + Storage) ────┘
 ```
 
-## ✨ Features
+## Features
 
 ### Mobile App (Flutter)
 - **Authentication** — Email/Password & Google Sign-In with email verification
 - **One-Tap Translation** — Pick image → translate → view result
+- **Chapter Translation** — Upload multiple pages or ZIP archive for batch processing
 - **Translation History** — Auto-saved with timestamps, deletable, favoritable
 - **Theming** — Light, Dark, and System Default modes
 - **About & Feedback** — In-app guide, rate, and email feedback
 
 ### Backend (Python)
-- **Bubble Detection** — Roboflow ML model detects speech bubbles
-- **OCR** — EasyOCR extracts text from manga panels (Japanese, Chinese, English)
-- **AI Translation** — DeepSeek LLM translates with context awareness
-- **Text Rendering** — Wraps and centers translated text back into bubbles
+- **Bubble Detection** — Custom YOLOv11 model detects speech bubbles and free text regions
+- **OCR** — EasyOCR extracts text (Japanese, Korean, Chinese, English)
+- **Orientation Support** — Vertical mode (manga/manhua) with character rotation, horizontal mode (manhwa) with direct OCR
+- **AI Translation** — DeepSeek LLM translates entire chapters in a single batched API call
+- **Smart Rendering** — Dynamic font scaling, pixel-accurate text wrapping, two-pass overlay to prevent adjacent bubble overlap
+- **Async Jobs** — Background processing with real-time progress tracking and progressive page delivery
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 LinguaPanel/
-├── linguapanel/              # Flutter mobile app (MVVM + Provider)
+├── linguapanel/                # Flutter mobile app (MVVM + Provider)
 │   └── lib/
 │       ├── core/
-│       │   ├── config/       # App configuration (API URLs)
-│       │   ├── services/     # Auth & History services
-│       │   └── utils/        # Themes & UI helpers
+│       │   ├── config/         # App configuration (API URLs)
+│       │   ├── services/       # Auth & History services
+│       │   └── utils/          # Themes & UI helpers
 │       └── features/
-│           ├── auth/         # Login, Register, Forgot Password
-│           ├── home/         # Image picker & translation
-│           ├── history/      # Translation history & favorites
-│           ├── settings/     # App settings
-│           └── about/        # About page
+│           ├── auth/           # Login, Register, Forgot Password
+│           ├── home/           # Image picker & translation
+│           ├── history/        # Translation history & favorites
+│           ├── settings/       # App settings
+│           └── about/          # About page
 │
-├── android_backend/          # Python FastAPI backend
-│   ├── api.py                # HTTP endpoint
-│   ├── core_new.py           # Translation pipeline
-│   ├── config.py             # Environment-based config
-│   ├── Dockerfile            # Container deployment
-│   └── .env.example          # Required env vars template
+├── android_backend/            # Python FastAPI backend
+│   ├── api.py                  # HTTP routes & job workers
+│   ├── core_new.py             # Translation pipeline
+│   ├── model_inference.py      # YOLO & ONNX model wrappers
+│   ├── job_manager.py          # Async job store with auto-cleanup
+│   ├── config.py               # Environment variable loader
+│   ├── Dockerfile              # Production container
+│   └── models/                 # ML models (git-ignored)
+│       ├── best.pt             # YOLOv11 bubble detection
+│       └── character_detection.onnx
 │
-└── README.md                 # This file
+├── _debug_tools/               # Debug scripts & test images (git-ignored)
+└── README.md
 ```
 
 The Flutter app follows **MVVM (Model-View-ViewModel)** with the `provider` package for state management.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -98,34 +106,26 @@ pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env and fill in your DeepSeek API key
+# Edit .env and set your DeepSeek API key
 ```
 
 ### 3. ML Model Setup
 
-This project uses **custom fine-tuned RF-DETR** models for bubble detection and character detection, running locally via ONNX Runtime (no external API needed).
+Place the following model files in `android_backend/models/`:
 
-**Option A: Convert from PyTorch weights (if you have .pth files)**
-```bash
-# Install export dependencies (one-time)
-pip install "rfdetr[onnxexport]"
+| File | Size | Purpose |
+|------|------|---------|
+| `best.pt` | ~19 MB | YOLOv11 bubble detection (classes: `text_bubble`, `text_free`) |
+| `character_detection.onnx` | ~130 MB | Character-level detection for vertical text rotation |
 
-# Run the conversion script
-python convert_to_onnx.py
-# This creates models/bubble_detection.onnx and models/character_detection.onnx
-```
-
-**Option B: Use pre-converted ONNX models**
-Place the following files in `android_backend/models/`:
-- `bubble_detection.onnx` — Text bubble detection model
-- `character_detection.onnx` — Character/letter detection model
+> **Note:** Model files are git-ignored due to size. Contact the repository owner for access, or train your own using the provided architecture.
 
 ```bash
 # Start the server
 python api.py
 ```
 
-The backend will start at `http://localhost:8080`.
+The backend will start at `http://localhost:8080`. Interactive API docs available at `/docs`.
 
 ### 4. Firebase Setup
 
@@ -166,13 +166,10 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8080
 ```bash
 cd android_backend
 docker build -t linguapanel-api .
-docker run -p 8080:8080 \
-  -e ROBOFLOW_API_KEY=your_key \
-  -e DEEPSEEK_API_KEY=your_key \
-  linguapanel-api
+docker run -p 8080:8080 --env-file .env linguapanel-api
 ```
 
-## 📦 Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -182,18 +179,18 @@ docker run -p 8080:8080 \
 | Database | Cloud Firestore |
 | File Storage | Firebase Storage |
 | Backend API | FastAPI, Python |
-| Bubble Detection | Roboflow Inference SDK |
+| Bubble Detection | YOLOv11 (custom fine-tuned) |
+| Character Detection | ONNX Runtime |
 | OCR | EasyOCR |
 | Translation | DeepSeek API (LLM) |
 | Deployment | Docker, Google Cloud Run |
 
-## 📝 Environment Variables
+## Environment Variables
 
 ### Backend (`android_backend/.env`)
 
 | Variable | Description |
 |---|---|
-| `ROBOFLOW_API_KEY` | API key from [Roboflow](https://roboflow.com/) for speech bubble detection |
 | `DEEPSEEK_API_KEY` | API key from [DeepSeek](https://platform.deepseek.com/) for LLM translation |
 
 ### Flutter (build-time)
@@ -202,6 +199,6 @@ docker run -p 8080:8080 \
 |---|---|
 | `API_BASE_URL` | Backend server URL, passed via `--dart-define` |
 
-## 📄 License
+## License
 
 This project is for educational and portfolio purposes.
