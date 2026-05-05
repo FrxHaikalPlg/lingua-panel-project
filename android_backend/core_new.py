@@ -14,7 +14,7 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
 
 # Minimum EasyOCR confidence to accept a text detection
 OCR_CONFIDENCE_THRESHOLD = 0.35
-
+ 
 # Font paths bundled with the backend
 _FONT_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
 _FONT_REGULAR = os.path.join(_FONT_DIR, "NotoSans-Regular.ttf")
@@ -650,76 +650,3 @@ def apply_translation_overlay(image_path: str, crops: list, translated_text: str
     cv2.imwrite(output_path, final)
     return output_path
 
-
-# ---------------------------------------------------------------------------
-# Single-image pipeline (used by /jobs/image and /translate_image)
-# ---------------------------------------------------------------------------
-
-def run_translation_pipeline(image_path, lang="ja", progress_callback=None, output_path=None):
-    """
-    Orchestrate the full manga translation pipeline for a single image.
-
-    Args:
-        image_path:        Path to the input image.
-        lang:              EasyOCR source language code.
-        progress_callback: Optional callable(message, step, total).
-        output_path:       Where to save result (default: translated_{filename}).
-    """
-    def _report(message: str, step: int, total: int):
-        if progress_callback:
-            progress_callback(message, step, total)
-
-    base_dir = os.path.dirname(image_path)
-    temp_crop_dir = os.path.join(base_dir, "temp_crops")
-    temp_processed_dir = os.path.join(base_dir, "temp_processed")
-
-    try:
-        reader = get_reader(lang)
-        original_image = cv2.imread(image_path)
-        if original_image is None:
-            raise FileNotFoundError("Original image not found or unreadable.")
-
-        _report("Detecting text bubbles...", 1, 4)
-        bubble_crops = process_manga_page(image_path, temp_crop_dir)
-        if not bubble_crops:
-            print("No text bubbles detected.")
-            return image_path
-
-        _report("Running OCR...", 2, 4)
-        all_ocr_text = ""
-        for idx, crop_info in enumerate(bubble_crops):
-            processed_path = os.path.join(temp_processed_dir, f"processed_{idx}.jpg")
-            os.makedirs(temp_processed_dir, exist_ok=True)
-
-            rotated_result = process_image_with_rotation(crop_info["path"], processed_path)
-            if not rotated_result:
-                continue
-
-            ocr_results = perform_ocr(reader, rotated_result["result"])
-            if not ocr_results:
-                ocr_results = perform_ocr(reader, crop_info["image"])
-
-            if ocr_results:
-                text = " ".join(r[1] for r in ocr_results)
-                all_ocr_text += f"[Text Area #{idx + 1}]\n{text}\n\n"
-
-        if not all_ocr_text.strip():
-            print("No text found after OCR.")
-            return image_path
-
-        _report("Translating...", 3, 4)
-        translated_text = translate_text(all_ocr_text)
-
-        _report("Rendering result...", 4, 4)
-        final_panel = create_translated_panel(original_image, bubble_crops, translated_text)
-
-        dest = output_path or os.path.join(
-            os.path.dirname(image_path), f"translated_{os.path.basename(image_path)}"
-        )
-        cv2.imwrite(dest, final_panel)
-        return dest
-
-    finally:
-        for temp_dir in [temp_crop_dir, temp_processed_dir]:
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)

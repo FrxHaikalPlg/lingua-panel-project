@@ -7,13 +7,10 @@ import zipfile
 import uvicorn
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from starlette.background import BackgroundTask
 from typing import List
 
 from core_new import (
-    run_translation_pipeline,
     detect_and_ocr_page,
     translate_chapter,
     apply_translation_overlay,
@@ -53,29 +50,34 @@ def _delete(path: str):
             pass
 
 
-def _make_progress_callback(job_id: str):
-    """Return a callback that updates job progress for a single-image job."""
-    def cb(message: str, step: int, total: int):
-        job_manager.update(job_id, message=message, progress=step, total=total, status="running")
-    return cb
-
 
 # ---------------------------------------------------------------------------
 # Background workers
 # ---------------------------------------------------------------------------
 
 def _run_single_job(job_id: str, image_path: str, lang: str, orientation: str = "vertical"):
-    """Background worker for single-image translation job."""
+    """Background worker for single-image translation job (uses same 3-phase pipeline as chapter)."""
     try:
-        result_filename = f"page_1{os.path.splitext(image_path)[1]}"
-        output_path = os.path.join(job_manager.get(job_id).result_dir, result_filename)
+        reader = get_reader(lang)
 
-        run_translation_pipeline(
-            image_path,
-            lang=lang,
-            progress_callback=_make_progress_callback(job_id),
-            output_path=output_path,
-        )
+        # Phase 1: Detect + OCR
+        job_manager.update(job_id, progress=1, total=4, message="Scanning...", status="running")
+        work_dir = os.path.join(TEMP_DIR, f"work_{job_id}_0")
+        os.makedirs(work_dir, exist_ok=True)
+        crops, ocr_text = detect_and_ocr_page(image_path, reader, work_dir, orientation=orientation)
+
+        # Phase 2: Translate
+        job_manager.update(job_id, progress=2, total=4, message="Translating...", status="running")
+        translations = {}
+        if ocr_text.strip():
+            translations = translate_chapter({0: ocr_text})
+
+        # Phase 3: Render
+        job_manager.update(job_id, progress=3, total=4, message="Rendering...", status="running")
+        ext = os.path.splitext(image_path)[1].lower()
+        result_filename = f"page_1{ext}"
+        output_path = os.path.join(job_manager.get(job_id).result_dir, result_filename)
+        apply_translation_overlay(image_path, crops, translations.get(0, ""), output_path)
 
         job_manager.append_result(job_id, page=1, filename=result_filename)
         job_manager.update(job_id, status="done", progress=4, total=4, message="Done!")
@@ -85,6 +87,9 @@ def _run_single_job(job_id: str, image_path: str, lang: str, orientation: str = 
         job_manager.update(job_id, status="failed", error=str(e))
     finally:
         _delete(image_path)
+        work_dir = os.path.join(TEMP_DIR, f"work_{job_id}_0")
+        if os.path.exists(work_dir):
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _run_chapter_job(job_id: str, image_paths: list[str], lang: str, orientation: str = "vertical"):
@@ -165,52 +170,14 @@ def _run_chapter_job(job_id: str, image_paths: list[str], lang: str, orientation
                 shutil.rmtree(work_dir, ignore_errors=True)
 
 
-
 # ---------------------------------------------------------------------------
-# Routes — legacy quick endpoint
+# Routes
 # ---------------------------------------------------------------------------
 
 @app.get("/")
 def read_root():
     return {"message": "LinguaPanel Translation API v2", "docs": "/docs"}
 
-
-@app.post("/translate_image", summary="Quick single-image translate (synchronous)")
-async def translate_image(
-    lang: str = Query("ja", description="Source language for OCR"),
-    orientation: str = Query("vertical", description="Text orientation: 'vertical' (manga/manhua) or 'horizontal' (manhwa)"),
-    file: UploadFile = File(...),
-):
-    """
-    Legacy synchronous endpoint — uploads image and waits for the full
-    translated result. Useful for quick testing via Swagger UI.
-    """
-    file_path = None
-    try:
-        ext = os.path.splitext(file.filename)[1].lower()
-        if ext not in ALLOWED_EXTS:
-            raise HTTPException(status_code=400, detail="Invalid file type.")
-        file_path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}{ext}")
-        with open(file_path, "wb") as buf:
-            shutil.copyfileobj(file.file, buf)
-
-        result_path = await run_in_threadpool(run_translation_pipeline, file_path, lang)
-
-        if not os.path.exists(result_path):
-            raise HTTPException(status_code=500, detail="Output file not found.")
-
-        out_ext = os.path.splitext(result_path)[1].lower()
-        media_type = "image/png" if out_ext == ".png" else "image/jpeg"
-        paths_to_clean = list({file_path, result_path})
-        return FileResponse(
-            path=result_path, media_type=media_type,
-            filename=f"translated_{os.path.basename(result_path)}",
-            background=BackgroundTask(lambda ps: [_delete(p) for p in ps], paths_to_clean),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        file.file.close()
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +321,8 @@ def get_job_page(job_id: str, page: int):
         raise HTTPException(status_code=404, detail="File not found on disk.")
 
     ext = os.path.splitext(file_path)[1].lower()
-    media_type = "image/png" if ext == ".png" else "image/jpeg"
+    media_types = {".png": "image/png", ".webp": "image/webp"}
+    media_type = media_types.get(ext, "image/jpeg")
     return FileResponse(path=file_path, media_type=media_type, filename=match["filename"])
 
 
