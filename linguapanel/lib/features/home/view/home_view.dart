@@ -91,42 +91,19 @@ class HomeView extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // --- Mode Toggle ---
+                      _buildModeToggle(context, viewModel),
+                      const SizedBox(height: 12),
+
                       // --- Settings Row ---
                       _buildSettingsRow(context, viewModel),
                       const SizedBox(height: 16),
 
-                      // --- Pick Image Button ---
-                      ElevatedButton.icon(
-                        onPressed:
-                            viewModel.isLoading ? null : () => viewModel.pickImage(),
-                        icon: const Icon(Icons.photo_library),
-                        label: const Text('Select Manga Panel'),
-                      ),
-                      const SizedBox(height: 20),
-
-                      // --- Original Image ---
-                      _buildImageDisplay(
-                          context, 'Original Image', viewModel.selectedImage),
-                      const SizedBox(height: 20),
-
-                      // --- Translate Button ---
-                      if (viewModel.selectedImage != null && !viewModel.isLoading)
-                        ElevatedButton.icon(
-                          onPressed: () => viewModel.translateImage(),
-                          icon:
-                              const Icon(Icons.translate, color: Colors.white),
-                          label: const Text('Translate'),
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green),
-                        ),
-                      const SizedBox(height: 20),
-
-                      // --- Progress / Result ---
-                      if (viewModel.isLoading)
-                        _buildProgressIndicator(viewModel)
-                      else if (viewModel.translatedImageBytes != null)
-                        _buildImageDisplayFromBytes(context, 'Translated Image',
-                            viewModel.translatedImageBytes),
+                      // --- Content based on mode ---
+                      if (viewModel.mode == TranslationMode.single)
+                        _buildSingleImageContent(context, viewModel)
+                      else
+                        _buildChapterContent(context, viewModel),
                     ],
                   ),
                 ),
@@ -138,10 +115,38 @@ class HomeView extends StatelessWidget {
     );
   }
 
+  // -------------------------------------------------------
+  // Mode Toggle
+  // -------------------------------------------------------
+  Widget _buildModeToggle(BuildContext context, HomeViewModel viewModel) {
+    return SegmentedButton<TranslationMode>(
+      segments: const [
+        ButtonSegment(
+          value: TranslationMode.single,
+          label: Text('Single Image'),
+          icon: Icon(Icons.image),
+        ),
+        ButtonSegment(
+          value: TranslationMode.chapter,
+          label: Text('Chapter'),
+          icon: Icon(Icons.collections),
+        ),
+      ],
+      selected: {viewModel.mode},
+      onSelectionChanged: viewModel.isLoading
+          ? null
+          : (Set<TranslationMode> selected) {
+              viewModel.setMode(selected.first);
+            },
+    );
+  }
+
+  // -------------------------------------------------------
+  // Settings Row (shared)
+  // -------------------------------------------------------
   Widget _buildSettingsRow(BuildContext context, HomeViewModel viewModel) {
     return Row(
       children: [
-        // Language dropdown
         Expanded(
           child: DropdownButtonFormField<String>(
             value: viewModel.selectedLang,
@@ -161,7 +166,6 @@ class HomeView extends StatelessWidget {
                 : (val) {
                     if (val != null) {
                       viewModel.setLanguage(val);
-                      // Auto-set orientation based on language
                       if (val == 'ko') {
                         viewModel.setOrientation('horizontal');
                       } else if (val == 'ja' || val == 'ch_sim') {
@@ -172,7 +176,6 @@ class HomeView extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 12),
-        // Orientation dropdown
         Expanded(
           child: DropdownButtonFormField<String>(
             value: viewModel.selectedOrientation,
@@ -198,6 +201,208 @@ class HomeView extends StatelessWidget {
     );
   }
 
+  // -------------------------------------------------------
+  // Single Image Content
+  // -------------------------------------------------------
+  Widget _buildSingleImageContent(BuildContext context, HomeViewModel viewModel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ElevatedButton.icon(
+          onPressed: viewModel.isLoading ? null : () => viewModel.pickImage(),
+          icon: const Icon(Icons.photo_library),
+          label: const Text('Select Image'),
+        ),
+        const SizedBox(height: 20),
+        _buildImageDisplay(context, 'Original Image', viewModel.selectedImage),
+        const SizedBox(height: 20),
+        if (viewModel.selectedImage != null && !viewModel.isLoading)
+          ElevatedButton.icon(
+            onPressed: () => viewModel.translateImage(),
+            icon: const Icon(Icons.translate, color: Colors.white),
+            label: const Text('Translate'),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+          ),
+        const SizedBox(height: 20),
+        if (viewModel.isLoading)
+          _buildProgressIndicator(viewModel)
+        else if (viewModel.translatedImageBytes != null)
+          _buildImageDisplayFromBytes(
+              context, 'Translated Image', viewModel.translatedImageBytes),
+      ],
+    );
+  }
+
+  // -------------------------------------------------------
+  // Chapter Content
+  // -------------------------------------------------------
+  Widget _buildChapterContent(BuildContext context, HomeViewModel viewModel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // --- Pick buttons ---
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: viewModel.isLoading
+                    ? null
+                    : () => viewModel.pickChapterImages(),
+                icon: const Icon(Icons.photo_library),
+                label: const Text('Select Images'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed:
+                    viewModel.isLoading ? null : () => viewModel.pickZipFile(),
+                icon: const Icon(Icons.folder_zip),
+                label: const Text('Select ZIP'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // --- Selected files info ---
+        if (viewModel.selectedChapterImages.isNotEmpty && !viewModel.isLoading)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '${viewModel.selectedChapterImages.length} file(s) selected',
+                style: Theme.of(context).textTheme.titleMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              // Thumbnail grid of selected images
+              _buildThumbnailGrid(viewModel.selectedChapterImages),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () => viewModel.translateChapter(),
+                icon: const Icon(Icons.translate, color: Colors.white),
+                label: Text(
+                    'Translate ${viewModel.selectedChapterImages.length} Page(s)'),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+              ),
+            ],
+          ),
+        const SizedBox(height: 20),
+
+        // --- Progress ---
+        if (viewModel.isLoading) _buildProgressIndicator(viewModel),
+
+        // --- Chapter results ---
+        if (!viewModel.isLoading && viewModel.translatedChapterPages.isNotEmpty)
+          _buildChapterResults(context, viewModel),
+      ],
+    );
+  }
+
+  Widget _buildThumbnailGrid(List<File> images) {
+    // Show first file name if it's a ZIP
+    if (images.length == 1 && images.first.path.toLowerCase().endsWith('.zip')) {
+      return Container(
+        height: 80,
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade300),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Center(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.folder_zip, size: 32, color: Colors.orange),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  images.first.path.split(RegExp(r'[/\\]')).last,
+                  style: const TextStyle(fontSize: 14),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: 80,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: images.length,
+        itemBuilder: (context, index) {
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.file(
+                images[index],
+                width: 60,
+                height: 80,
+                fit: BoxFit.cover,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildChapterResults(BuildContext context, HomeViewModel viewModel) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Translated Pages (${viewModel.translatedChapterPages.length})',
+          style: Theme.of(context).textTheme.titleLarge,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 12),
+        ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: viewModel.translatedChapterPages.length,
+          itemBuilder: (context, index) {
+            final pageBytes = viewModel.translatedChapterPages[index];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: GestureDetector(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>
+                          FullScreenImageViewer(imageBytes: pageBytes),
+                    ),
+                  );
+                },
+                child: Column(
+                  children: [
+                    Text(
+                      'Page ${index + 1}',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.memory(pageBytes, fit: BoxFit.contain),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  // -------------------------------------------------------
+  // Shared widgets
+  // -------------------------------------------------------
   Widget _buildProgressIndicator(HomeViewModel viewModel) {
     return Column(
       children: [
@@ -254,7 +459,8 @@ class HomeView extends StatelessWidget {
                 : Container(
                     height: 250,
                     alignment: Alignment.center,
-                    child: const Text('No image selected', style: TextStyle(color: Colors.grey)),
+                    child: const Text('No image selected',
+                        style: TextStyle(color: Colors.grey)),
                   ),
           ),
         ),
@@ -262,7 +468,8 @@ class HomeView extends StatelessWidget {
     );
   }
 
-  Widget _buildImageDisplayFromBytes(BuildContext context, String title, Uint8List? imageBytes) {
+  Widget _buildImageDisplayFromBytes(
+      BuildContext context, String title, Uint8List? imageBytes) {
     return Column(
       children: [
         Text(title, style: Theme.of(context).textTheme.titleLarge),
@@ -273,7 +480,8 @@ class HomeView extends StatelessWidget {
               Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (context) => FullScreenImageViewer(imageBytes: imageBytes),
+                  builder: (context) =>
+                      FullScreenImageViewer(imageBytes: imageBytes),
                 ),
               );
             }
@@ -292,7 +500,8 @@ class HomeView extends StatelessWidget {
                 : Container(
                     height: 250,
                     alignment: Alignment.center,
-                    child: const Text('No image to display', style: TextStyle(color: Colors.grey)),
+                    child: const Text('No image to display',
+                        style: TextStyle(color: Colors.grey)),
                   ),
           ),
         ),
