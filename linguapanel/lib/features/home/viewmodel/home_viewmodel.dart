@@ -1,34 +1,67 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:linguapanel/core/services/history_service.dart';
-import 'package:linguapanel/core/config/app_config.dart';
-import 'package:linguapanel/features/history/model/translation_history.dart';
-import 'package:uuid/uuid.dart';
+import 'package:linguapanel/core/services/translation_service.dart';
 
 class HomeViewModel extends ChangeNotifier {
+  // --- State ---
   File? _selectedImage;
   Uint8List? _translatedImageBytes;
   bool _isLoading = false;
   String? _errorMessage;
+  String _progressMessage = '';
+  int _progressPercent = 0;
 
+  // --- Settings ---
+  String _selectedLang = 'ja';
+  String _selectedOrientation = 'vertical';
+
+  // --- Getters ---
   File? get selectedImage => _selectedImage;
   Uint8List? get translatedImageBytes => _translatedImageBytes;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+  String get progressMessage => _progressMessage;
+  int get progressPercent => _progressPercent;
+  String get selectedLang => _selectedLang;
+  String get selectedOrientation => _selectedOrientation;
 
   final ImagePicker _picker = ImagePicker();
+  StreamSubscription? _pollSubscription;
+
+  // --- Available options ---
+  static const Map<String, String> languageOptions = {
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'ch_sim': 'Chinese (Simplified)',
+    'en': 'English',
+  };
+
+  static const Map<String, String> orientationOptions = {
+    'vertical': 'Vertical (Manga / Manhua)',
+    'horizontal': 'Horizontal (Manhwa)',
+  };
+
+  // --- Setters ---
+  void setLanguage(String lang) {
+    _selectedLang = lang;
+    notifyListeners();
+  }
+
+  void setOrientation(String orientation) {
+    _selectedOrientation = orientation;
+    notifyListeners();
+  }
 
   void setErrorMessage(String? message) {
     _errorMessage = message;
     notifyListeners();
   }
 
+  // --- Pick Image ---
   Future<void> pickImage() async {
     setErrorMessage(null);
     _translatedImageBytes = null;
@@ -42,118 +75,82 @@ class HomeViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- Translate ---
   Future<void> translateImage() async {
     if (_selectedImage == null) {
       setErrorMessage("Please select an image first.");
-      notifyListeners();
       return;
     }
 
     _isLoading = true;
-    setErrorMessage(null);
+    _errorMessage = null;
     _translatedImageBytes = null;
+    _progressMessage = 'Uploading...';
+    _progressPercent = 0;
     notifyListeners();
 
     try {
-      var connectivityResult = await (Connectivity().checkConnectivity());
-      if (connectivityResult == ConnectivityResult.none) {
-        setErrorMessage("No internet connection. Please check your network.");
-        _isLoading = false;
-        notifyListeners();
-        return;
+      // Check connectivity
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) {
+        throw TranslationException("No internet connection.");
       }
 
-      var uri = Uri.parse(AppConfig.translateImageEndpoint);
-      var request = http.MultipartRequest('POST', uri);
-      request.files.add(await http.MultipartFile.fromPath('file', _selectedImage!.path));
-
-      final response = await request.send();
-
-      if (response.statusCode == 200) {
-        final responseBytes = await response.stream.toBytes();
-        _translatedImageBytes = responseBytes;
-        _isLoading = false;
-        notifyListeners(); 
-
-        await _saveHistory(responseBytes);
-      } else {
-        final responseBody = await response.stream.bytesToString();
-        _handleErrorResponse(response.statusCode, responseBody);
-      }
-    } on SocketException {
-      setErrorMessage("Network error. Please check your internet connection.");
-    } on FirebaseException catch (e) {
-      setErrorMessage("Firebase error: ${e.message}");
-    } catch (e) {
-      setErrorMessage("An unexpected error occurred. Please try again later.");
-    } finally {
-      _isLoading = false;
+      // Submit job
+      _progressMessage = 'Submitting...';
       notifyListeners();
-    }
-  }
 
-  void _handleErrorResponse(int statusCode, String responseBody) {
-    switch (statusCode) {
-      case 400:
-        setErrorMessage("Bad request. Please check the selected image and try again.");
-        break;
-      case 404:
-        setErrorMessage("Translation service not found. Please try again later.");
-        break;
-      case 500:
-        setErrorMessage("Server error. Please try again later.");
-        break;
-      default:
-        setErrorMessage("Error: $statusCode - $responseBody");
-    }
-  }
-
-  Future<void> _saveHistory(Uint8List translatedImageBytes) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      print("User not logged in, cannot save to history.");
-      return;
-    }
-
-    final historyId = const Uuid().v4();
-
-    try {
-      final storage = FirebaseStorage.instance;
-      final timestamp = DateTime.now();
-
-      final originalImagePath = 'images/${user.uid}/$historyId-original.jpg';
-      final translatedImagePath = 'images/${user.uid}/$historyId-translated.jpg';
-
-      final originalImageRef = storage.ref().child(originalImagePath);
-      await originalImageRef.putFile(_selectedImage!);
-      final originalImageUrl = await originalImageRef.getDownloadURL();
-
-      final translatedImageRef = storage.ref().child(translatedImagePath);
-      await translatedImageRef.putData(translatedImageBytes);
-      final translatedImageUrl = await translatedImageRef.getDownloadURL();
-
-      final newHistory = TranslationHistory(
-        id: historyId,
-        originalImageUrl: originalImageUrl,
-        translatedImageUrl: translatedImageUrl,
-        timestamp: timestamp,
+      final jobId = await TranslationService.submitImage(
+        _selectedImage!,
+        lang: _selectedLang,
+        orientation: _selectedOrientation,
       );
 
-      await HistoryService().addHistory(newHistory);
-    } on FirebaseException catch (e) {
-      print("Error saving history to Firebase: ${e.message}");
-      setErrorMessage("Could not save translation to history. Please check your connection.");
-      notifyListeners();
+      // Poll for progress
+      await for (final status in TranslationService.pollJobStatus(jobId)) {
+        _progressMessage = status.message;
+        _progressPercent = status.percent;
+        notifyListeners();
+
+        if (status.isFailed) {
+          throw TranslationException(status.error ?? 'Translation failed.');
+        }
+
+        if (status.isDone && status.results.isNotEmpty) {
+          // Download the translated page
+          _progressMessage = 'Downloading result...';
+          notifyListeners();
+
+          _translatedImageBytes = await TranslationService.downloadPage(jobId, 1);
+        }
+      }
+    } on TranslationException catch (e) {
+      setErrorMessage(e.message);
+    } on SocketException {
+      setErrorMessage("Network error. Please check your connection.");
     } catch (e) {
-      print("Error saving history: $e");
+      setErrorMessage("An unexpected error occurred. Please try again.");
+    } finally {
+      _isLoading = false;
+      _progressMessage = '';
+      _progressPercent = 0;
+      notifyListeners();
     }
   }
 
   void clearState() {
     _selectedImage = null;
     _translatedImageBytes = null;
-    setErrorMessage(null);
+    _errorMessage = null;
     _isLoading = false;
+    _progressMessage = '';
+    _progressPercent = 0;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _pollSubscription?.cancel();
+    super.dispose();
   }
 }

@@ -91,6 +91,11 @@ class HomeView extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // --- Settings Row ---
+                      _buildSettingsRow(context, viewModel),
+                      const SizedBox(height: 16),
+
+                      // --- Pick Image Button ---
                       ElevatedButton.icon(
                         onPressed:
                             viewModel.isLoading ? null : () => viewModel.pickImage(),
@@ -98,9 +103,13 @@ class HomeView extends StatelessWidget {
                         label: const Text('Select Manga Panel'),
                       ),
                       const SizedBox(height: 20),
+
+                      // --- Original Image ---
                       _buildImageDisplay(
                           context, 'Original Image', viewModel.selectedImage),
                       const SizedBox(height: 20),
+
+                      // --- Translate Button ---
                       if (viewModel.selectedImage != null && !viewModel.isLoading)
                         ElevatedButton.icon(
                           onPressed: () => viewModel.translateImage(),
@@ -111,8 +120,10 @@ class HomeView extends StatelessWidget {
                               backgroundColor: Colors.green),
                         ),
                       const SizedBox(height: 20),
+
+                      // --- Progress / Result ---
                       if (viewModel.isLoading)
-                        const Center(child: CircularProgressIndicator())
+                        _buildProgressIndicator(viewModel)
                       else if (viewModel.translatedImageBytes != null)
                         _buildImageDisplayFromBytes(context, 'Translated Image',
                             viewModel.translatedImageBytes),
@@ -124,6 +135,92 @@ class HomeView extends StatelessWidget {
           ),
         );
       }),
+    );
+  }
+
+  Widget _buildSettingsRow(BuildContext context, HomeViewModel viewModel) {
+    return Row(
+      children: [
+        // Language dropdown
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            value: viewModel.selectedLang,
+            decoration: const InputDecoration(
+              labelText: 'Language',
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              isDense: true,
+            ),
+            items: HomeViewModel.languageOptions.entries
+                .map((e) => DropdownMenuItem(
+                      value: e.key,
+                      child: Text(e.value, style: const TextStyle(fontSize: 13)),
+                    ))
+                .toList(),
+            onChanged: viewModel.isLoading
+                ? null
+                : (val) {
+                    if (val != null) {
+                      viewModel.setLanguage(val);
+                      // Auto-set orientation based on language
+                      if (val == 'ko') {
+                        viewModel.setOrientation('horizontal');
+                      } else if (val == 'ja' || val == 'ch_sim') {
+                        viewModel.setOrientation('vertical');
+                      }
+                    }
+                  },
+          ),
+        ),
+        const SizedBox(width: 12),
+        // Orientation dropdown
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            value: viewModel.selectedOrientation,
+            decoration: const InputDecoration(
+              labelText: 'Orientation',
+              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              isDense: true,
+            ),
+            items: HomeViewModel.orientationOptions.entries
+                .map((e) => DropdownMenuItem(
+                      value: e.key,
+                      child: Text(e.value, style: const TextStyle(fontSize: 13)),
+                    ))
+                .toList(),
+            onChanged: viewModel.isLoading
+                ? null
+                : (val) {
+                    if (val != null) viewModel.setOrientation(val);
+                  },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProgressIndicator(HomeViewModel viewModel) {
+    return Column(
+      children: [
+        LinearProgressIndicator(
+          value: viewModel.progressPercent > 0
+              ? viewModel.progressPercent / 100.0
+              : null,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          viewModel.progressMessage,
+          style: const TextStyle(color: Colors.grey),
+          textAlign: TextAlign.center,
+        ),
+        if (viewModel.progressPercent > 0)
+          Text(
+            '${viewModel.progressPercent}%',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+      ],
     );
   }
 
