@@ -1,53 +1,37 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:hive/hive.dart';
 
-class TranslationHistory {
+part 'translation_history.g.dart';
+
+@HiveType(typeId: 0)
+class TranslationHistory extends HiveObject {
+  @HiveField(0)
   final String id;
-  final String originalImageUrl;
-  final String translatedImageUrl;
+
+  @HiveField(1)
+  final String originalImagePath;
+
+  @HiveField(2)
+  final String translatedImagePath;
+
+  @HiveField(3)
   final DateTime timestamp;
+
+  @HiveField(4)
   bool isFavorite;
+
+  @HiveField(5)
+  final String sourceLang;
+
+  @HiveField(6)
+  final String orientation;
 
   TranslationHistory({
     required this.id,
-    required this.originalImageUrl,
-    required this.translatedImageUrl,
+    required this.originalImagePath,
+    required this.translatedImagePath,
     required this.timestamp,
     this.isFavorite = false,
+    this.sourceLang = 'ja',
+    this.orientation = 'vertical',
   });
-
-  factory TranslationHistory.fromMap(Map<String, dynamic> map) {
-    return TranslationHistory(
-      id: map['id'] ?? '',
-      originalImageUrl: map['originalImageUrl'] ?? '',
-      translatedImageUrl: map['translatedImageUrl'] ?? '',
-      timestamp: (map['timestamp'] as Timestamp).toDate(),
-      isFavorite: map['isFavorite'] ?? false,
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'id': id,
-      'originalImageUrl': originalImageUrl,
-      'translatedImageUrl': translatedImageUrl,
-      'timestamp': Timestamp.fromDate(timestamp),
-      'isFavorite': isFavorite,
-    };
-  }
-
-  TranslationHistory copyWith({
-    String? id,
-    String? originalImageUrl,
-    String? translatedImageUrl,
-    DateTime? timestamp,
-    bool? isFavorite,
-  }) {
-    return TranslationHistory(
-      id: id ?? this.id,
-      originalImageUrl: originalImageUrl ?? this.originalImageUrl,
-      translatedImageUrl: translatedImageUrl ?? this.translatedImageUrl,
-      timestamp: timestamp ?? this.timestamp,
-      isFavorite: isFavorite ?? this.isFavorite,
-    );
-  }
 }

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:linguapanel/core/services/history_service.dart';
 import 'package:linguapanel/core/services/translation_service.dart';
 
 class HomeViewModel extends ChangeNotifier {
@@ -122,6 +123,20 @@ class HomeViewModel extends ChangeNotifier {
           notifyListeners();
 
           _translatedImageBytes = await TranslationService.downloadPage(jobId, 1);
+
+          // Save to local history
+          if (_translatedImageBytes != null && _selectedImage != null) {
+            try {
+              await HistoryService.saveTranslation(
+                originalImage: _selectedImage!,
+                translatedImageBytes: _translatedImageBytes!,
+                sourceLang: _selectedLang,
+                orientation: _selectedOrientation,
+              );
+            } catch (_) {
+              // Don't fail the translation if history save fails
+            }
+          }
         }
       }
     } on TranslationException catch (e) {

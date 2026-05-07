@@ -1,7 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:linguapanel/core/utils/ui_helpers.dart';
-import 'package:linguapanel/features/history/model/translation_history.dart';
 import 'package:linguapanel/features/history/viewmodel/history_viewmodel.dart';
 import 'package:linguapanel/features/widgets/full_screen_image_viewer.dart';
 import 'package:provider/provider.dart';
@@ -57,97 +57,76 @@ class HistoryView extends StatelessWidget {
               viewModel.setErrorMessage(null);
             });
           }
-          return StreamBuilder<List<TranslationHistory>>(
-            stream: viewModel.historyStream,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
 
-              if (snapshot.hasError) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Text(
-                      'Could not load history. Please check your internet connection and try again.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 18, color: Colors.red),
-                    ),
-                  ),
-                );
-              }
+          final historyItems = viewModel.historyItems;
 
-              if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                return const Center(
-                  child: Text(
-                    'No history found.',
-                    style: TextStyle(fontSize: 18, color: Colors.grey),
-                  ),
-                );
-              }
+          if (historyItems.isEmpty) {
+            return const Center(
+              child: Text(
+                'No history found.',
+                style: TextStyle(fontSize: 18, color: Colors.grey),
+              ),
+            );
+          }
 
-              final historyItems = snapshot.data!;
-
-              return ListView.builder(
-                padding: const EdgeInsets.all(8.0),
-                itemCount: historyItems.length,
-                itemBuilder: (context, index) {
-                  final item = historyItems[index];
-                  return Card(
-                    margin: const EdgeInsets.symmetric(vertical: 8.0),
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+          return ListView.builder(
+            padding: const EdgeInsets.all(8.0),
+            itemCount: historyItems.length,
+            itemBuilder: (context, index) {
+              final item = historyItems[index];
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 8.0),
+                elevation: 4,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        DateFormat.yMMMd().add_jm().format(item.timestamp),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text(
-                            DateFormat.yMMMd().add_jm().format(item.timestamp),
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16),
+                          IconButton(
+                            icon: Icon(
+                              item.isFavorite
+                                  ? Icons.star
+                                  : Icons.star_border,
+                              color: item.isFavorite
+                                  ? Colors.amber
+                                  : Colors.grey,
+                            ),
+                            onPressed: () =>
+                                viewModel.toggleFavorite(item.id),
                           ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  item.isFavorite
-                                      ? Icons.star
-                                      : Icons.star_border,
-                                  color: item.isFavorite
-                                      ? Colors.amber
-                                      : Colors.grey,
-                                ),
-                                onPressed: () => viewModel.toggleFavorite(
-                                    item.id, item.isFavorite),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline,
-                                    color: Colors.red),
-                                onPressed: () => _showDeleteConfirmationDialog(
-                                    context, viewModel, item.id),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _buildImagePreview(
-                                    context, 'Original', item.originalImageUrl),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: _buildImagePreview(context, 'Translated',
-                                    item.translatedImageUrl),
-                              ),
-                            ],
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline,
+                                color: Colors.red),
+                            onPressed: () => _showDeleteConfirmationDialog(
+                                context, viewModel, item.id),
                           ),
                         ],
                       ),
-                    ),
-                  );
-                },
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildImagePreview(
+                                context, 'Original', item.originalImagePath),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _buildImagePreview(context, 'Translated',
+                                item.translatedImagePath),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               );
             },
           );
@@ -157,10 +136,9 @@ class HistoryView extends StatelessWidget {
   }
 
   Widget _buildImagePreview(
-      BuildContext context, String title, String imageUrl) {
-    if (imageUrl.isEmpty) {
-      return const Center(child: Text('Image not available'));
-    }
+      BuildContext context, String title, String imagePath) {
+    final file = File(imagePath);
+    final exists = file.existsSync();
 
     return Column(
       children: [
@@ -168,12 +146,12 @@ class HistoryView extends StatelessWidget {
         const SizedBox(height: 8),
         GestureDetector(
           onTap: () {
-            if (imageUrl.isNotEmpty) {
+            if (exists) {
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) =>
-                      FullScreenImageViewer(imageUrl: imageUrl),
+                      FullScreenImageViewer(imageFile: file),
                 ),
               );
             }
@@ -185,21 +163,13 @@ class HistoryView extends StatelessWidget {
               border: Border.all(color: Colors.grey.shade300),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                imageUrl,
-                fit: BoxFit.contain,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return const Center(child: CircularProgressIndicator());
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return const Center(
-                      child: Icon(Icons.error, color: Colors.red));
-                },
-              ),
-            ),
+            child: exists
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(file, fit: BoxFit.contain),
+                  )
+                : const Center(
+                    child: Icon(Icons.broken_image, color: Colors.grey)),
           ),
         ),
       ],

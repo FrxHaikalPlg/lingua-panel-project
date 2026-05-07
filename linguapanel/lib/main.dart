@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:linguapanel/auth_gate.dart';
+import 'package:linguapanel/core/services/history_service.dart';
 import 'package:linguapanel/core/utils/app_themes.dart';
 import 'package:linguapanel/features/settings/viewmodel/theme_viewmodel.dart';
 import 'package:provider/provider.dart';
@@ -13,6 +14,7 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   await Hive.initFlutter();
+  await HistoryService.init();
 
   final themeViewModel = ThemeViewModel();
   await themeViewModel.init();

@@ -1,7 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:linguapanel/core/utils/ui_helpers.dart';
-import 'package:linguapanel/features/history/model/translation_history.dart';
 import 'package:linguapanel/features/history/viewmodel/history_viewmodel.dart';
 import 'package:linguapanel/features/widgets/full_screen_image_viewer.dart';
 import 'package:provider/provider.dart';
@@ -47,39 +47,13 @@ class FavoritesView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final viewModel = Provider.of<HistoryViewModel>(context, listen: false);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Favorites'),
       ),
-      body: StreamBuilder<List<TranslationHistory>>(
-        stream: viewModel.historyStream,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                'Error: ${snapshot.error}',
-                style: const TextStyle(fontSize: 18, color: Colors.red),
-              ),
-            );
-          }
-
-          if (!snapshot.hasData) {
-            return const Center(
-              child: Text(
-                'No items found.',
-                style: TextStyle(fontSize: 18, color: Colors.grey),
-              ),
-            );
-          }
-
-          final favoriteItems =
-              snapshot.data!.where((item) => item.isFavorite).toList();
+      body: Consumer<HistoryViewModel>(
+        builder: (context, viewModel, child) {
+          final favoriteItems = viewModel.favoriteItems;
 
           if (favoriteItems.isEmpty) {
             return const Center(
@@ -115,11 +89,11 @@ class FavoritesView extends StatelessWidget {
                           children: [
                             IconButton(
                               icon: const Icon(
-                                Icons.star, // It's always a star in favorites
+                                Icons.star,
                                 color: Colors.amber,
                               ),
-                              onPressed: () => viewModel.toggleFavorite(
-                                  item.id, item.isFavorite),
+                              onPressed: () =>
+                                  viewModel.toggleFavorite(item.id),
                             ),
                             IconButton(
                               icon: const Icon(Icons.delete_outline,
@@ -135,12 +109,12 @@ class FavoritesView extends StatelessWidget {
                         children: [
                           Expanded(
                             child: _buildImagePreview(
-                                context, 'Original', item.originalImageUrl),
+                                context, 'Original', item.originalImagePath),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: _buildImagePreview(context, 'Translated',
-                                item.translatedImageUrl),
+                                item.translatedImagePath),
                           ),
                         ],
                       ),
@@ -156,10 +130,9 @@ class FavoritesView extends StatelessWidget {
   }
 
   Widget _buildImagePreview(
-      BuildContext context, String title, String imageUrl) {
-    if (imageUrl.isEmpty) {
-      return const Center(child: Text('Image not available'));
-    }
+      BuildContext context, String title, String imagePath) {
+    final file = File(imagePath);
+    final exists = file.existsSync();
 
     return Column(
       children: [
@@ -167,13 +140,15 @@ class FavoritesView extends StatelessWidget {
         const SizedBox(height: 8),
         GestureDetector(
           onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) =>
-                    FullScreenImageViewer(imageUrl: imageUrl),
-              ),
-            );
+            if (exists) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      FullScreenImageViewer(imageFile: file),
+                ),
+              );
+            }
           },
           child: Container(
             height: 150,
@@ -182,21 +157,13 @@ class FavoritesView extends StatelessWidget {
               border: Border.all(color: Colors.grey.shade300),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                imageUrl,
-                fit: BoxFit.contain,
-                loadingBuilder: (context, child, loadingProgress) {
-                  if (loadingProgress == null) return child;
-                  return const Center(child: CircularProgressIndicator());
-                },
-                errorBuilder: (context, error, stackTrace) {
-                  return const Center(
-                      child: Icon(Icons.error, color: Colors.red));
-                },
-              ),
-            ),
+            child: exists
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(file, fit: BoxFit.contain),
+                  )
+                : const Center(
+                    child: Icon(Icons.broken_image, color: Colors.grey)),
           ),
         ),
       ],

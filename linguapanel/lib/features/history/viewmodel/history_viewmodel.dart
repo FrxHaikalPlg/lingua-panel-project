@@ -1,11 +1,8 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:linguapanel/core/services/history_service.dart';
 import 'package:linguapanel/features/history/model/translation_history.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 class HistoryViewModel extends ChangeNotifier {
-  final HistoryService _historyService = HistoryService();
   String? _errorMessage;
   String? get errorMessage => _errorMessage;
 
@@ -14,38 +11,45 @@ class HistoryViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Stream<List<TranslationHistory>> get historyStream {
+  /// Get all history items (sorted newest first).
+  List<TranslationHistory> get historyItems {
     try {
-      return _historyService.getHistoryStream().handleError((error) {
-        if (error is FirebaseException) {
-          setErrorMessage('Error fetching history: ${error.message}');
-        } else {
-          setErrorMessage('An unknown error occurred while fetching history.');
-        }
-      });
+      return HistoryService.getAll();
     } catch (e) {
-      setErrorMessage('An unexpected error occurred.');
-      return Stream.value([]);
+      setErrorMessage('Error loading history.');
+      return [];
     }
   }
 
-  Future<void> toggleFavorite(String historyId, bool currentStatus) async {
+  /// Get only favorite items.
+  List<TranslationHistory> get favoriteItems {
     try {
-      await _historyService.toggleFavorite(historyId, currentStatus);
-    } on FirebaseException catch (e) {
-      setErrorMessage('Error updating favorite status: ${e.message}');
+      return HistoryService.getFavorites();
     } catch (e) {
-      setErrorMessage('An unknown error occurred.');
+      return [];
+    }
+  }
+
+  /// Refresh the list (call after save/delete/toggle).
+  void refresh() {
+    notifyListeners();
+  }
+
+  Future<void> toggleFavorite(String historyId) async {
+    try {
+      await HistoryService.toggleFavorite(historyId);
+      notifyListeners();
+    } catch (e) {
+      setErrorMessage('Error updating favorite status.');
     }
   }
 
   Future<void> deleteHistoryItem(String historyId) async {
     try {
-      await _historyService.deleteHistory(historyId);
-    } on FirebaseException catch (e) {
-      setErrorMessage('Error deleting history item: ${e.message}');
+      await HistoryService.delete(historyId);
+      notifyListeners();
     } catch (e) {
-      setErrorMessage('An unknown error occurred.');
+      setErrorMessage('Error deleting history item.');
     }
   }
 }
