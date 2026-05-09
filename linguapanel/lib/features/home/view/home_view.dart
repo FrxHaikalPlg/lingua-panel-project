@@ -28,53 +28,39 @@ class HomeView extends StatelessWidget {
           appBar: AppBar(
             title: const Text('LinguaPanel'),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.history),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ChangeNotifierProvider.value(
-                        value:
-                            Provider.of<HistoryViewModel>(context, listen: false),
-                        child: const HistoryView(),
-                      ),
+              _appBarAction(Icons.history, 'History', () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ChangeNotifierProvider.value(
+                      value: Provider.of<HistoryViewModel>(context,
+                          listen: false),
+                      child: const HistoryView(),
                     ),
-                  );
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.star),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ChangeNotifierProvider.value(
-                        value:
-                            Provider.of<HistoryViewModel>(context, listen: false),
-                        child: const FavoritesView(),
-                      ),
+                  ),
+                );
+              }),
+              _appBarAction(Icons.star_rounded, 'Favorites', () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ChangeNotifierProvider.value(
+                      value: Provider.of<HistoryViewModel>(context,
+                          listen: false),
+                      child: const FavoritesView(),
                     ),
-                  );
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings),
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const SettingsView(),
-                    ),
-                  );
-                },
-              ),
-              IconButton(
-                icon: const Icon(Icons.logout),
-                onPressed: () {
-                  authService.signOut();
-                },
-              ),
+                  ),
+                );
+              }),
+              _appBarAction(Icons.settings_rounded, 'Settings', () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SettingsView()),
+                );
+              }),
+              _appBarAction(Icons.logout_rounded, 'Logout', () {
+                authService.signOut();
+              }),
             ],
           ),
           body: Consumer<HomeViewModel>(
@@ -86,24 +72,27 @@ class HomeView extends StatelessWidget {
                 });
               }
               return SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
                 child: Padding(
-                  padding: const EdgeInsets.all(16.0),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       // --- Mode Toggle ---
                       _buildModeToggle(context, viewModel),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
 
-                      // --- Settings Row ---
-                      _buildSettingsRow(context, viewModel),
+                      // --- Settings Card ---
+                      _buildSettingsCard(context, viewModel),
                       const SizedBox(height: 16),
 
                       // --- Content based on mode ---
-                      if (viewModel.mode == TranslationMode.single)
-                        _buildSingleImageContent(context, viewModel)
-                      else
-                        _buildChapterContent(context, viewModel),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 300),
+                        child: viewModel.mode == TranslationMode.single
+                            ? _buildSingleImageContent(context, viewModel)
+                            : _buildChapterContent(context, viewModel),
+                      ),
                     ],
                   ),
                 ),
@@ -115,9 +104,19 @@ class HomeView extends StatelessWidget {
     );
   }
 
+  Widget _appBarAction(IconData icon, String tooltip, VoidCallback onPressed) {
+    return IconButton(
+      icon: Icon(icon),
+      tooltip: tooltip,
+      onPressed: onPressed,
+    );
+  }
+
   bool _isZipSelected(HomeViewModel viewModel) {
     return viewModel.selectedChapterImages.length == 1 &&
-        viewModel.selectedChapterImages.first.path.toLowerCase().endsWith('.zip');
+        viewModel.selectedChapterImages.first.path
+            .toLowerCase()
+            .endsWith('.zip');
   }
 
   // -------------------------------------------------------
@@ -129,12 +128,12 @@ class HomeView extends StatelessWidget {
         ButtonSegment(
           value: TranslationMode.single,
           label: Text('Single Image'),
-          icon: Icon(Icons.image),
+          icon: Icon(Icons.image_rounded),
         ),
         ButtonSegment(
           value: TranslationMode.chapter,
           label: Text('Chapter'),
-          icon: Icon(Icons.collections),
+          icon: Icon(Icons.collections_rounded),
         ),
       ],
       selected: {viewModel.mode},
@@ -147,93 +146,119 @@ class HomeView extends StatelessWidget {
   }
 
   // -------------------------------------------------------
-  // Settings Row (shared)
+  // Settings Card
   // -------------------------------------------------------
-  Widget _buildSettingsRow(BuildContext context, HomeViewModel viewModel) {
-    return Row(
-      children: [
-        Expanded(
-          child: DropdownButtonFormField<String>(
-            value: viewModel.selectedLang,
-            decoration: const InputDecoration(
-              labelText: 'Language',
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              isDense: true,
+  Widget _buildSettingsCard(BuildContext context, HomeViewModel viewModel) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Translation Settings',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
             ),
-            items: HomeViewModel.languageOptions.entries
-                .map((e) => DropdownMenuItem(
-                      value: e.key,
-                      child: Text(e.value, style: const TextStyle(fontSize: 13)),
-                    ))
-                .toList(),
-            onChanged: viewModel.isLoading
-                ? null
-                : (val) {
-                    if (val != null) {
-                      viewModel.setLanguage(val);
-                      if (val == 'ko') {
-                        viewModel.setOrientation('horizontal');
-                      } else if (val == 'ja' || val == 'ch_sim') {
-                        viewModel.setOrientation('vertical');
-                      }
-                    }
-                  },
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: DropdownButtonFormField<String>(
-            value: viewModel.selectedOrientation,
-            decoration: const InputDecoration(
-              labelText: 'Orientation',
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              isDense: true,
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: viewModel.selectedLang,
+                    decoration: const InputDecoration(
+                      labelText: 'Source Language',
+                      prefixIcon: Icon(Icons.language_rounded, size: 20),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      isDense: true,
+                    ),
+                    items: HomeViewModel.languageOptions.entries
+                        .map((e) => DropdownMenuItem(
+                              value: e.key,
+                              child: Text(e.value,
+                                  style: const TextStyle(fontSize: 13)),
+                            ))
+                        .toList(),
+                    onChanged: viewModel.isLoading
+                        ? null
+                        : (val) {
+                            if (val != null) {
+                              viewModel.setLanguage(val);
+                              if (val == 'ko') {
+                                viewModel.setOrientation('horizontal');
+                              } else if (val == 'ja' || val == 'ch_sim') {
+                                viewModel.setOrientation('vertical');
+                              }
+                            }
+                          },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: viewModel.selectedOrientation,
+                    decoration: const InputDecoration(
+                      labelText: 'Text Direction',
+                      prefixIcon:
+                          Icon(Icons.text_rotation_none_rounded, size: 20),
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      isDense: true,
+                    ),
+                    items: HomeViewModel.orientationOptions.entries
+                        .map((e) => DropdownMenuItem(
+                              value: e.key,
+                              child: Text(e.value,
+                                  style: const TextStyle(fontSize: 13)),
+                            ))
+                        .toList(),
+                    onChanged: viewModel.isLoading
+                        ? null
+                        : (val) {
+                            if (val != null) viewModel.setOrientation(val);
+                          },
+                  ),
+                ),
+              ],
             ),
-            items: HomeViewModel.orientationOptions.entries
-                .map((e) => DropdownMenuItem(
-                      value: e.key,
-                      child: Text(e.value, style: const TextStyle(fontSize: 13)),
-                    ))
-                .toList(),
-            onChanged: viewModel.isLoading
-                ? null
-                : (val) {
-                    if (val != null) viewModel.setOrientation(val);
-                  },
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
   // -------------------------------------------------------
   // Single Image Content
   // -------------------------------------------------------
-  Widget _buildSingleImageContent(BuildContext context, HomeViewModel viewModel) {
+  Widget _buildSingleImageContent(
+      BuildContext context, HomeViewModel viewModel) {
     return Column(
+      key: const ValueKey('single'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ElevatedButton.icon(
+        _buildActionButton(
+          icon: Icons.add_photo_alternate_rounded,
+          label: 'Select Image',
           onPressed: viewModel.isLoading ? null : () => viewModel.pickImage(),
-          icon: const Icon(Icons.photo_library),
-          label: const Text('Select Image'),
         ),
-        const SizedBox(height: 20),
-        _buildImageDisplay(context, 'Original Image', viewModel.selectedImage),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
+        _buildImageCard(context, 'Original Image', viewModel.selectedImage),
+        const SizedBox(height: 16),
         if (viewModel.selectedImage != null && !viewModel.isLoading)
-          ElevatedButton.icon(
+          _buildActionButton(
+            icon: Icons.translate_rounded,
+            label: 'Translate',
+            color: const Color(0xFF34D399),
             onPressed: () => viewModel.translateImage(),
-            icon: const Icon(Icons.translate, color: Colors.white),
-            label: const Text('Translate'),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
           ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         if (viewModel.isLoading)
-          _buildProgressIndicator(viewModel)
+          _buildProgressCard(viewModel)
         else if (viewModel.translatedImageBytes != null)
-          _buildImageDisplayFromBytes(
-              context, 'Translated Image', viewModel.translatedImageBytes),
+          _buildResultCard(context, viewModel.translatedImageBytes!),
       ],
     );
   }
@@ -243,99 +268,297 @@ class HomeView extends StatelessWidget {
   // -------------------------------------------------------
   Widget _buildChapterContent(BuildContext context, HomeViewModel viewModel) {
     return Column(
+      key: const ValueKey('chapter'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // --- Pick buttons ---
+        // Pick buttons
         Row(
           children: [
             Expanded(
-              child: ElevatedButton.icon(
+              child: _buildActionButton(
+                icon: Icons.photo_library_rounded,
+                label: 'Select Images',
                 onPressed: viewModel.isLoading
                     ? null
                     : () => viewModel.pickChapterImages(),
-                icon: const Icon(Icons.photo_library),
-                label: const Text('Select Images'),
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: ElevatedButton.icon(
-                onPressed:
-                    viewModel.isLoading ? null : () => viewModel.pickZipFile(),
-                icon: const Icon(Icons.folder_zip),
-                label: const Text('Select ZIP'),
+              child: _buildActionButton(
+                icon: Icons.folder_zip_rounded,
+                label: 'Select ZIP',
+                onPressed: viewModel.isLoading
+                    ? null
+                    : () => viewModel.pickZipFile(),
               ),
             ),
           ],
         ),
         const SizedBox(height: 16),
 
-        // --- Selected files info ---
-        if (viewModel.selectedChapterImages.isNotEmpty && !viewModel.isLoading) ...[
-            Text(
-              _isZipSelected(viewModel)
-                  ? '1 ZIP file selected'
-                  : '${viewModel.selectedChapterImages.length} image(s) selected',
-              style: Theme.of(context).textTheme.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            // Thumbnail grid of selected images
-            _buildThumbnailGrid(viewModel.selectedChapterImages),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: () => viewModel.translateChapter(),
-              icon: const Icon(Icons.translate, color: Colors.white),
-              label: Text(
-                _isZipSelected(viewModel)
-                    ? 'Translate ZIP'
-                    : 'Translate ${viewModel.selectedChapterImages.length} Image(s)',
+        // Selected files
+        if (viewModel.selectedChapterImages.isNotEmpty &&
+            !viewModel.isLoading) ...[
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _isZipSelected(viewModel)
+                            ? Icons.folder_zip_rounded
+                            : Icons.collections_rounded,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isZipSelected(viewModel)
+                            ? '1 ZIP file selected'
+                            : '${viewModel.selectedChapterImages.length} image(s) selected',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ],
+                  ),
+                  if (!_isZipSelected(viewModel)) ...[
+                    const SizedBox(height: 12),
+                    _buildThumbnailGrid(viewModel.selectedChapterImages),
+                  ],
+                ],
               ),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             ),
-          ],
-        const SizedBox(height: 20),
+          ),
+          const SizedBox(height: 12),
+          _buildActionButton(
+            icon: Icons.translate_rounded,
+            label: _isZipSelected(viewModel)
+                ? 'Translate ZIP'
+                : 'Translate ${viewModel.selectedChapterImages.length} Image(s)',
+            color: const Color(0xFF34D399),
+            onPressed: () => viewModel.translateChapter(),
+          ),
+        ],
+        const SizedBox(height: 16),
 
-        // --- Progress ---
-        if (viewModel.isLoading) _buildProgressIndicator(viewModel),
+        if (viewModel.isLoading) _buildProgressCard(viewModel),
 
-        // --- Chapter results ---
-        if (!viewModel.isLoading && viewModel.translatedChapterPages.isNotEmpty)
+        if (!viewModel.isLoading &&
+            viewModel.translatedChapterPages.isNotEmpty)
           _buildChapterResults(context, viewModel),
       ],
     );
   }
 
-  Widget _buildThumbnailGrid(List<File> images) {
-    // Show first file name if it's a ZIP
-    if (images.length == 1 && images.first.path.toLowerCase().endsWith('.zip')) {
-      return Container(
-        height: 80,
-        decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey.shade300),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Center(
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.folder_zip, size: 32, color: Colors.orange),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  images.first.path.split(RegExp(r'[/\\]')).last,
-                  style: const TextStyle(fontSize: 14),
-                  overflow: TextOverflow.ellipsis,
+  // -------------------------------------------------------
+  // Shared Components
+  // -------------------------------------------------------
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    VoidCallback? onPressed,
+    Color? color,
+  }) {
+    return ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon),
+      label: Text(label),
+      style: color != null
+          ? ElevatedButton.styleFrom(
+              backgroundColor: color,
+              foregroundColor: Colors.white,
+            )
+          : null,
+    );
+  }
+
+  Widget _buildProgressCard(HomeViewModel viewModel) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation(
+                      viewModel.progressPercent > 0
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF818CF8),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Flexible(
+                  child: Text(
+                    viewModel.progressMessage,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w500, fontSize: 14),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            if (viewModel.progressPercent > 0) ...[
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: viewModel.progressPercent / 100.0,
+                  minHeight: 8,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor:
+                      const AlwaysStoppedAnimation(Color(0xFF34D399)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${viewModel.progressPercent}%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 18,
+                  color: Color(0xFF34D399),
                 ),
               ),
             ],
-          ),
+          ],
         ),
-      );
-    }
+      ),
+    );
+  }
 
+  Widget _buildImageCard(BuildContext context, String title, File? imageFile) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                Icon(Icons.image_rounded,
+                    size: 18, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Text(title, style: Theme.of(context).textTheme.titleSmall),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              if (imageFile != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        FullScreenImageViewer(imageFile: imageFile),
+                  ),
+                );
+              }
+            },
+            child: imageFile != null
+                ? Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.file(imageFile, fit: BoxFit.contain),
+                    ),
+                  )
+                : Container(
+                    height: 200,
+                    margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .primary
+                          .withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.15),
+                        width: 1.5,
+                        strokeAlign: BorderSide.strokeAlignInside,
+                      ),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.add_photo_alternate_outlined,
+                          size: 48,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.4),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'No image selected',
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultCard(BuildContext context, Uint8List imageBytes) {
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded,
+                    size: 18, color: Color(0xFF34D399)),
+                const SizedBox(width: 8),
+                Text('Translated Result',
+                    style: Theme.of(context).textTheme.titleSmall),
+              ],
+            ),
+          ),
+          GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      FullScreenImageViewer(imageBytes: imageBytes),
+                ),
+              );
+            },
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(imageBytes, fit: BoxFit.contain),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildThumbnailGrid(List<File> images) {
     return SizedBox(
-      height: 80,
+      height: 72,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         itemCount: images.length,
@@ -343,11 +566,11 @@ class HomeView extends StatelessWidget {
           return Padding(
             padding: const EdgeInsets.only(right: 8),
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(8),
               child: Image.file(
                 images[index],
-                width: 60,
-                height: 80,
+                width: 52,
+                height: 72,
                 fit: BoxFit.cover,
               ),
             ),
@@ -358,160 +581,71 @@ class HomeView extends StatelessWidget {
   }
 
   Widget _buildChapterResults(BuildContext context, HomeViewModel viewModel) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Translated Pages (${viewModel.translatedChapterPages.length})',
-          style: Theme.of(context).textTheme.titleLarge,
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 12),
-        ListView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: viewModel.translatedChapterPages.length,
-          itemBuilder: (context, index) {
-            final pageBytes = viewModel.translatedChapterPages[index];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: GestureDetector(
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle_rounded,
+                    size: 18, color: Color(0xFF34D399)),
+                const SizedBox(width: 8),
+                Text(
+                  'Translated (${viewModel.translatedChapterPages.length} pages)',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ],
+            ),
+          ),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: viewModel.translatedChapterPages.length,
+            itemBuilder: (context, index) {
+              final pageBytes = viewModel.translatedChapterPages[index];
+              return GestureDetector(
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) =>
+                      builder: (_) =>
                           FullScreenImageViewer(imageBytes: pageBytes),
                     ),
                   );
                 },
-                child: Column(
-                  children: [
-                    Text(
-                      'Page ${index + 1}',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.memory(pageBytes, fit: BoxFit.contain),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  // -------------------------------------------------------
-  // Shared widgets
-  // -------------------------------------------------------
-  Widget _buildProgressIndicator(HomeViewModel viewModel) {
-    return Column(
-      children: [
-        LinearProgressIndicator(
-          value: viewModel.progressPercent > 0
-              ? viewModel.progressPercent / 100.0
-              : null,
-        ),
-        const SizedBox(height: 8),
-        Text(
-          viewModel.progressMessage,
-          style: const TextStyle(color: Colors.grey),
-          textAlign: TextAlign.center,
-        ),
-        if (viewModel.progressPercent > 0)
-          Text(
-            '${viewModel.progressPercent}%',
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildImageDisplay(BuildContext context, String title, File? imageFile) {
-    return Column(
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        GestureDetector(
-          onTap: () {
-            if (imageFile != null) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => FullScreenImageViewer(imageFile: imageFile),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: Column(
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 4, left: 4),
+                          child: Text(
+                            'Page ${index + 1}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade500,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child:
+                            Image.memory(pageBytes, fit: BoxFit.contain),
+                      ),
+                    ],
+                  ),
                 ),
               );
-            }
-          },
-          child: Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: imageFile != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(imageFile, fit: BoxFit.contain),
-                  )
-                : Container(
-                    height: 250,
-                    alignment: Alignment.center,
-                    child: const Text('No image selected',
-                        style: TextStyle(color: Colors.grey)),
-                  ),
+            },
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildImageDisplayFromBytes(
-      BuildContext context, String title, Uint8List? imageBytes) {
-    return Column(
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 8),
-        GestureDetector(
-          onTap: () {
-            if (imageBytes != null) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      FullScreenImageViewer(imageBytes: imageBytes),
-                ),
-              );
-            }
-          },
-          child: Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: imageBytes != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(imageBytes, fit: BoxFit.contain),
-                  )
-                : Container(
-                    height: 250,
-                    alignment: Alignment.center,
-                    child: const Text('No image to display',
-                        style: TextStyle(color: Colors.grey)),
-                  ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

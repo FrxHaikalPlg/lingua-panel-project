@@ -63,7 +63,7 @@ class HistoryService {
 
     final pageCount = translatedPages.length;
     final autoTitle = title ??
-        'Translation-${_nextNumber} ($pageCount ${pageCount == 1 ? "image" : "images"})';
+        'Translation-$_nextNumber ($pageCount ${pageCount == 1 ? "image" : "images"})';
 
     final history = TranslationHistory(
       id: id,

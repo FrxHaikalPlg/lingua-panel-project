@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class FullScreenImageViewer extends StatelessWidget {
   final File? imageFile;
@@ -22,19 +22,27 @@ class FullScreenImageViewer extends StatelessWidget {
       imageProvider = NetworkImage(imageUrl!);
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
         backgroundColor: Colors.black,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white), // Make back button white
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          panEnabled: true,
-          minScale: 0.5,
-          maxScale: 4.0,
-          child: Image(image: imageProvider),
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          iconTheme: const IconThemeData(color: Colors.white),
+          systemOverlayStyle: SystemUiOverlayStyle.light,
+        ),
+        body: Center(
+          child: Hero(
+            tag: 'image_viewer',
+            child: InteractiveViewer(
+              panEnabled: true,
+              minScale: 0.5,
+              maxScale: 6.0,
+              child: Image(image: imageProvider),
+            ),
+          ),
         ),
       ),
     );
