@@ -173,11 +173,10 @@ class HomeViewModel extends ChangeNotifier {
           _translatedImageBytes = await TranslationService.downloadPage(jobId, 1);
 
           // Save to local history
-          if (_translatedImageBytes != null && _selectedImage != null) {
+          if (_translatedImageBytes != null) {
             try {
               await HistoryService.saveTranslation(
-                originalImage: _selectedImage!,
-                translatedImageBytes: _translatedImageBytes!,
+                translatedPages: [_translatedImageBytes!],
                 sourceLang: _selectedLang,
                 orientation: _selectedOrientation,
               );
@@ -255,27 +254,16 @@ class HomeViewModel extends ChangeNotifier {
             downloadedPages++;
           }
 
-          // Save each page to local history
+          // Save all pages as one history entry
           _progressMessage = 'Saving to history...';
           notifyListeners();
-          final isZip = _selectedChapterImages.length == 1 &&
-              _selectedChapterImages.first.path.toLowerCase().endsWith('.zip');
-          for (int i = 0; i < _translatedChapterPages.length; i++) {
-            try {
-              // For ZIP or multi-image: use the original file if available
-              final originalFile = isZip
-                  ? _selectedChapterImages.first
-                  : (i < _selectedChapterImages.length
-                      ? _selectedChapterImages[i]
-                      : _selectedChapterImages.first);
-              await HistoryService.saveTranslation(
-                originalImage: originalFile,
-                translatedImageBytes: _translatedChapterPages[i],
-                sourceLang: _selectedLang,
-                orientation: _selectedOrientation,
-              );
-            } catch (_) {}
-          }
+          try {
+            await HistoryService.saveTranslation(
+              translatedPages: _translatedChapterPages,
+              sourceLang: _selectedLang,
+              orientation: _selectedOrientation,
+            );
+          } catch (_) {}
         }
       }
     } on TranslationException catch (e) {

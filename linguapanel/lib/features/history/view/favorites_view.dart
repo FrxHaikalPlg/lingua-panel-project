@@ -2,12 +2,73 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:linguapanel/core/utils/ui_helpers.dart';
+import 'package:linguapanel/features/history/view/chapter_viewer_page.dart';
 import 'package:linguapanel/features/history/viewmodel/history_viewmodel.dart';
 import 'package:linguapanel/features/widgets/full_screen_image_viewer.dart';
+import 'package:linguapanel/features/history/model/translation_history.dart';
 import 'package:provider/provider.dart';
 
 class FavoritesView extends StatelessWidget {
   const FavoritesView({super.key});
+
+  void _openItem(BuildContext context, TranslationHistory item) {
+    if (item.isChapter) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChapterViewerPage(
+            title: item.title,
+            imagePaths: item.translatedImagePaths,
+          ),
+        ),
+      );
+    } else if (item.translatedImagePaths.isNotEmpty) {
+      final file = File(item.translatedImagePaths.first);
+      if (file.existsSync()) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FullScreenImageViewer(imageFile: file),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _showRenameDialog(
+      BuildContext context, HistoryViewModel viewModel, TranslationHistory item) async {
+    final controller = TextEditingController(text: item.title);
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Rename'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Enter new name',
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+            ),
+            TextButton(
+              child: const Text('Save'),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(controller.text.trim()),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (newTitle != null && newTitle.isNotEmpty) {
+      await viewModel.renameItem(item.id, newTitle);
+    }
+  }
 
   Future<void> _showDeleteConfirmationDialog(
       BuildContext context, HistoryViewModel viewModel, String historyId) async {
@@ -69,59 +130,7 @@ class FavoritesView extends StatelessWidget {
             itemCount: favoriteItems.length,
             itemBuilder: (context, index) {
               final item = favoriteItems[index];
-              return Card(
-                margin: const EdgeInsets.symmetric(vertical: 8.0),
-                elevation: 4,
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          DateFormat.yMMMd().add_jm().format(item.timestamp),
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 16),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(
-                                Icons.star,
-                                color: Colors.amber,
-                              ),
-                              onPressed: () =>
-                                  viewModel.toggleFavorite(item.id),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete_outline,
-                                  color: Colors.red),
-                              onPressed: () => _showDeleteConfirmationDialog(
-                                  context, viewModel, item.id),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildImagePreview(
-                                context, 'Original', item.originalImagePath),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _buildImagePreview(context, 'Translated',
-                                item.translatedImagePath),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              );
+              return _buildHistoryCard(context, viewModel, item);
             },
           );
         },
@@ -129,44 +138,119 @@ class FavoritesView extends StatelessWidget {
     );
   }
 
-  Widget _buildImagePreview(
-      BuildContext context, String title, String imagePath) {
-    final file = File(imagePath);
-    final exists = file.existsSync();
+  Widget _buildHistoryCard(
+      BuildContext context, HistoryViewModel viewModel, TranslationHistory item) {
+    final thumbnailPath = item.translatedImagePaths.isNotEmpty
+        ? item.translatedImagePaths.first
+        : '';
+    final thumbnailFile = File(thumbnailPath);
+    final thumbnailExists = thumbnailPath.isNotEmpty && thumbnailFile.existsSync();
 
-    return Column(
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 8),
-        GestureDetector(
-          onTap: () {
-            if (exists) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      FullScreenImageViewer(imageFile: file),
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6.0),
+      elevation: 3,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _openItem(context, item),
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: Row(
+            children: [
+              // --- Thumbnail ---
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 70,
+                  height: 90,
+                  child: thumbnailExists
+                      ? Image.file(thumbnailFile, fit: BoxFit.cover)
+                      : Container(
+                          color: Colors.grey.shade200,
+                          child: const Icon(Icons.broken_image,
+                              color: Colors.grey),
+                        ),
                 ),
-              );
-            }
-          },
-          child: Container(
-            height: 150,
-            width: 150,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.grey.shade300),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: exists
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(file, fit: BoxFit.contain),
-                  )
-                : const Center(
-                    child: Icon(Icons.broken_image, color: Colors.grey)),
+              ),
+              const SizedBox(width: 12),
+
+              // --- Title & info ---
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GestureDetector(
+                      onTap: () => _showRenameDialog(context, viewModel, item),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              item.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.edit, size: 14, color: Colors.grey),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      DateFormat.yMMMd().add_jm().format(item.timestamp),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (item.isChapter)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${item.pageCount} pages',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.blue.shade700,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+              // --- Actions ---
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.star, color: Colors.amber, size: 22),
+                    onPressed: () => viewModel.toggleFavorite(item.id),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minHeight: 36),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline,
+                        color: Colors.red, size: 22),
+                    onPressed: () => _showDeleteConfirmationDialog(
+                        context, viewModel, item.id),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minHeight: 36),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 }

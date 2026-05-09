@@ -8,7 +8,7 @@ part of 'translation_history.dart';
 
 class TranslationHistoryAdapter extends TypeAdapter<TranslationHistory> {
   @override
-  final int typeId = 0;
+  final int typeId = 1;
 
   @override
   TranslationHistory read(BinaryReader reader) {
@@ -18,8 +18,8 @@ class TranslationHistoryAdapter extends TypeAdapter<TranslationHistory> {
     };
     return TranslationHistory(
       id: fields[0] as String,
-      originalImagePath: fields[1] as String,
-      translatedImagePath: fields[2] as String,
+      title: fields[1] as String,
+      translatedImagePaths: (fields[2] as List).cast<String>(),
       timestamp: fields[3] as DateTime,
       isFavorite: fields[4] as bool,
       sourceLang: fields[5] as String,
@@ -34,9 +34,9 @@ class TranslationHistoryAdapter extends TypeAdapter<TranslationHistory> {
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
-      ..write(obj.originalImagePath)
+      ..write(obj.title)
       ..writeByte(2)
-      ..write(obj.translatedImagePath)
+      ..write(obj.translatedImagePaths)
       ..writeByte(3)
       ..write(obj.timestamp)
       ..writeByte(4)

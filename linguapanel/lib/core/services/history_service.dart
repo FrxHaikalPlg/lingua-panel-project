@@ -7,12 +7,12 @@ import 'package:uuid/uuid.dart';
 
 /// Local history storage using Hive.
 class HistoryService {
-  static const String _boxName = 'translation_history';
+  static const String _boxName = 'translation_history_v2';
   static Box<TranslationHistory>? _box;
 
   /// Initialize Hive and register adapters. Call once at app startup.
   static Future<void> init() async {
-    if (!Hive.isAdapterRegistered(0)) {
+    if (!Hive.isAdapterRegistered(1)) {
       Hive.registerAdapter(TranslationHistoryAdapter());
     }
     _box = await Hive.openBox<TranslationHistory>(_boxName);
@@ -24,6 +24,9 @@ class HistoryService {
     }
     return _box!;
   }
+
+  /// Get the next translation number for auto-naming.
+  static int get _nextNumber => _historyBox.length + 1;
 
   /// Get all history items sorted by timestamp (newest first).
   static List<TranslationHistory> getAll() {
@@ -37,35 +40,35 @@ class HistoryService {
     return getAll().where((item) => item.isFavorite).toList();
   }
 
-  /// Save a new translation to history.
-  /// Copies original and translated images to app-local storage.
+  /// Save a translation (single or chapter) to history.
+  /// [translatedPages] is a list of image bytes — 1 for single, N for chapter.
   static Future<TranslationHistory> saveTranslation({
-    required File originalImage,
-    required Uint8List translatedImageBytes,
+    required List<Uint8List> translatedPages,
     required String sourceLang,
     required String orientation,
+    String? title,
   }) async {
     final appDir = await getApplicationDocumentsDirectory();
     final historyDir = Directory('${appDir.path}/history');
     await historyDir.create(recursive: true);
 
     final id = const Uuid().v4();
+    final paths = <String>[];
 
-    // Determine extension from original file
-    final ext = originalImage.path.split('.').last.toLowerCase();
+    for (int i = 0; i < translatedPages.length; i++) {
+      final path = '${historyDir.path}/${id}_page${i + 1}.jpg';
+      await File(path).writeAsBytes(translatedPages[i]);
+      paths.add(path);
+    }
 
-    // Copy original image
-    final originalPath = '${historyDir.path}/${id}_original.$ext';
-    await originalImage.copy(originalPath);
-
-    // Save translated image
-    final translatedPath = '${historyDir.path}/${id}_translated.$ext';
-    await File(translatedPath).writeAsBytes(translatedImageBytes);
+    final pageCount = translatedPages.length;
+    final autoTitle = title ??
+        'Translation-${_nextNumber} ($pageCount ${pageCount == 1 ? "image" : "images"})';
 
     final history = TranslationHistory(
       id: id,
-      originalImagePath: originalPath,
-      translatedImagePath: translatedPath,
+      title: autoTitle,
+      translatedImagePaths: paths,
       timestamp: DateTime.now(),
       sourceLang: sourceLang,
       orientation: orientation,
@@ -73,6 +76,15 @@ class HistoryService {
 
     await _historyBox.put(id, history);
     return history;
+  }
+
+  /// Rename a history item.
+  static Future<void> rename(String id, String newTitle) async {
+    final item = _historyBox.get(id);
+    if (item != null) {
+      item.title = newTitle;
+      await item.save();
+    }
   }
 
   /// Toggle favorite status of a history item.
@@ -88,9 +100,9 @@ class HistoryService {
   static Future<void> delete(String id) async {
     final item = _historyBox.get(id);
     if (item != null) {
-      // Delete image files
-      _tryDeleteFile(item.originalImagePath);
-      _tryDeleteFile(item.translatedImagePath);
+      for (final path in item.translatedImagePaths) {
+        _tryDeleteFile(path);
+      }
       await _historyBox.delete(id);
     }
   }

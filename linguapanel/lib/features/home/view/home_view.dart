@@ -115,6 +115,11 @@ class HomeView extends StatelessWidget {
     );
   }
 
+  bool _isZipSelected(HomeViewModel viewModel) {
+    return viewModel.selectedChapterImages.length == 1 &&
+        viewModel.selectedChapterImages.first.path.toLowerCase().endsWith('.zip');
+  }
+
   // -------------------------------------------------------
   // Mode Toggle
   // -------------------------------------------------------
@@ -266,28 +271,29 @@ class HomeView extends StatelessWidget {
         const SizedBox(height: 16),
 
         // --- Selected files info ---
-        if (viewModel.selectedChapterImages.isNotEmpty && !viewModel.isLoading)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                '${viewModel.selectedChapterImages.length} file(s) selected',
-                style: Theme.of(context).textTheme.titleMedium,
-                textAlign: TextAlign.center,
+        if (viewModel.selectedChapterImages.isNotEmpty && !viewModel.isLoading) ...[
+            Text(
+              _isZipSelected(viewModel)
+                  ? '1 ZIP file selected'
+                  : '${viewModel.selectedChapterImages.length} image(s) selected',
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            // Thumbnail grid of selected images
+            _buildThumbnailGrid(viewModel.selectedChapterImages),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () => viewModel.translateChapter(),
+              icon: const Icon(Icons.translate, color: Colors.white),
+              label: Text(
+                _isZipSelected(viewModel)
+                    ? 'Translate ZIP'
+                    : 'Translate ${viewModel.selectedChapterImages.length} Image(s)',
               ),
-              const SizedBox(height: 8),
-              // Thumbnail grid of selected images
-              _buildThumbnailGrid(viewModel.selectedChapterImages),
-              const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: () => viewModel.translateChapter(),
-                icon: const Icon(Icons.translate, color: Colors.white),
-                label: Text(
-                    'Translate ${viewModel.selectedChapterImages.length} Page(s)'),
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-              ),
-            ],
-          ),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+            ),
+          ],
         const SizedBox(height: 20),
 
         // --- Progress ---

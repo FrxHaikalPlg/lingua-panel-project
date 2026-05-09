@@ -2,16 +2,16 @@ import 'package:hive/hive.dart';
 
 part 'translation_history.g.dart';
 
-@HiveType(typeId: 0)
+@HiveType(typeId: 1)
 class TranslationHistory extends HiveObject {
   @HiveField(0)
   final String id;
 
   @HiveField(1)
-  final String originalImagePath;
+  String title;
 
   @HiveField(2)
-  final String translatedImagePath;
+  final List<String> translatedImagePaths;
 
   @HiveField(3)
   final DateTime timestamp;
@@ -27,11 +27,14 @@ class TranslationHistory extends HiveObject {
 
   TranslationHistory({
     required this.id,
-    required this.originalImagePath,
-    required this.translatedImagePath,
+    required this.title,
+    required this.translatedImagePaths,
     required this.timestamp,
     this.isFavorite = false,
     this.sourceLang = 'ja',
     this.orientation = 'vertical',
   });
+
+  int get pageCount => translatedImagePaths.length;
+  bool get isChapter => translatedImagePaths.length > 1;
 }

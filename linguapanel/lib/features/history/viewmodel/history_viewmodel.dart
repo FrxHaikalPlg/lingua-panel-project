@@ -30,17 +30,21 @@ class HistoryViewModel extends ChangeNotifier {
     }
   }
 
-  /// Refresh the list (call after save/delete/toggle).
-  void refresh() {
-    notifyListeners();
-  }
-
   Future<void> toggleFavorite(String historyId) async {
     try {
       await HistoryService.toggleFavorite(historyId);
       notifyListeners();
     } catch (e) {
       setErrorMessage('Error updating favorite status.');
+    }
+  }
+
+  Future<void> renameItem(String historyId, String newTitle) async {
+    try {
+      await HistoryService.rename(historyId, newTitle);
+      notifyListeners();
+    } catch (e) {
+      setErrorMessage('Error renaming item.');
     }
   }
 
