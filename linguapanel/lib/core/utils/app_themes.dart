@@ -102,7 +102,24 @@ class AppThemes {
             borderRadius: BorderRadius.circular(_buttonRadius),
           ),
         ),
+        iconColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return Colors.white;
+          }
+          return _primaryLight;
+        }),
       ),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: const Color(0xFFEFF3F8),
+      indicatorColor: _primaryLight.withValues(alpha: 0.15),
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return const IconThemeData(color: _primaryLight);
+        }
+        return IconThemeData(color: Colors.grey.shade600);
+      }),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
@@ -242,7 +259,24 @@ class AppThemes {
             borderRadius: BorderRadius.circular(_buttonRadius),
           ),
         ),
+        iconColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const Color(0xFF1E1B4B);
+          }
+          return _primaryDark;
+        }),
       ),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: const Color(0xFF1A2332),
+      indicatorColor: _primaryDark.withValues(alpha: 0.15),
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return const IconThemeData(color: _primaryDark);
+        }
+        return IconThemeData(color: Colors.grey.shade500);
+      }),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,

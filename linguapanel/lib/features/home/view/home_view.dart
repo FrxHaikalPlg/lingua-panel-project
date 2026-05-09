@@ -205,14 +205,15 @@ class HomeContent extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         _buildImageCard(context, 'Original Image', viewModel.selectedImage),
-        const SizedBox(height: 16),
-        if (viewModel.selectedImage != null && !viewModel.isLoading)
+        if (viewModel.selectedImage != null && !viewModel.isLoading) ...[
+          const SizedBox(height: 16),
           _buildActionButton(
             icon: Icons.translate_rounded,
             label: 'Translate',
             color: const Color(0xFF34D399),
             onPressed: () => viewModel.translateImage(),
           ),
+        ],
         const SizedBox(height: 16),
         if (viewModel.isLoading)
           _buildProgressCard(viewModel)
