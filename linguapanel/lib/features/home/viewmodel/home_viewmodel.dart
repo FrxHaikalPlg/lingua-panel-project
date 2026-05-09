@@ -50,8 +50,8 @@ class HomeViewModel extends ChangeNotifier {
   };
 
   static const Map<String, String> orientationOptions = {
-    'vertical': 'Vertical (Manga / Manhua)',
-    'horizontal': 'Horizontal (Manhwa)',
+    'vertical': 'Vertical',
+    'horizontal': 'Horizontal',
   };
 
   // --- Setters ---

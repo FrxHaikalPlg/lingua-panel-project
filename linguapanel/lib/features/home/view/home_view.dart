@@ -88,7 +88,24 @@ class HomeView extends StatelessWidget {
 
                       // --- Content based on mode ---
                       AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 300),
+                        duration: const Duration(milliseconds: 250),
+                        switchInCurve: Curves.easeIn,
+                        switchOutCurve: Curves.easeOut,
+                        transitionBuilder: (child, animation) {
+                          return FadeTransition(
+                            opacity: animation,
+                            child: child,
+                          );
+                        },
+                        layoutBuilder: (currentChild, previousChildren) {
+                          return Stack(
+                            alignment: Alignment.topCenter,
+                            children: [
+                              ...previousChildren,
+                              if (currentChild != null) currentChild,
+                            ],
+                          );
+                        },
                         child: viewModel.mode == TranslationMode.single
                             ? _buildSingleImageContent(context, viewModel)
                             : _buildChapterContent(context, viewModel),
@@ -168,8 +185,9 @@ class HomeView extends StatelessWidget {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: viewModel.selectedLang,
+                    isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Source Language',
+                      labelText: 'Language',
                       prefixIcon: Icon(Icons.language_rounded, size: 20),
                       contentPadding:
                           EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -179,7 +197,8 @@ class HomeView extends StatelessWidget {
                         .map((e) => DropdownMenuItem(
                               value: e.key,
                               child: Text(e.value,
-                                  style: const TextStyle(fontSize: 13)),
+                                  style: const TextStyle(fontSize: 13),
+                                  overflow: TextOverflow.ellipsis),
                             ))
                         .toList(),
                     onChanged: viewModel.isLoading
@@ -200,10 +219,10 @@ class HomeView extends StatelessWidget {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: viewModel.selectedOrientation,
+                    isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Text Direction',
-                      prefixIcon:
-                          Icon(Icons.text_rotation_none_rounded, size: 20),
+                      labelText: 'Direction',
+                      prefixIcon: Icon(Icons.text_rotation_none_rounded, size: 20),
                       contentPadding:
                           EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       isDense: true,
@@ -212,7 +231,8 @@ class HomeView extends StatelessWidget {
                         .map((e) => DropdownMenuItem(
                               value: e.key,
                               child: Text(e.value,
-                                  style: const TextStyle(fontSize: 13)),
+                                  style: const TextStyle(fontSize: 13),
+                                  overflow: TextOverflow.ellipsis),
                             ))
                         .toList(),
                     onChanged: viewModel.isLoading
@@ -391,7 +411,7 @@ class HomeView extends StatelessWidget {
                     valueColor: AlwaysStoppedAnimation(
                       viewModel.progressPercent > 0
                           ? const Color(0xFF34D399)
-                          : const Color(0xFF818CF8),
+                          : const Color(0xFF60A5FA),
                     ),
                   ),
                 ),
@@ -467,10 +487,14 @@ class HomeView extends StatelessWidget {
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(10),
-                      child: Image.file(imageFile, fit: BoxFit.contain),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: Image.file(imageFile, fit: BoxFit.contain),
+                      ),
                     ),
                   )
                 : Container(
+                    width: double.infinity,
                     height: 200,
                     margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     decoration: BoxDecoration(

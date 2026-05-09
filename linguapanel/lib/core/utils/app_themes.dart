@@ -7,9 +7,9 @@ class AppThemes {
   AppThemes._();
 
   // ── Brand Colors ──
-  static const Color _primaryLight = Color(0xFF6366F1);  // Indigo-500
-  static const Color _primaryDark = Color(0xFF818CF8);   // Indigo-400
-  static const Color _accent = Color(0xFFF472B6);        // Pink-400
+  static const Color _primaryLight = Color(0xFF2563EB);  // Blue-600
+  static const Color _primaryDark = Color(0xFF60A5FA);   // Blue-400
+  static const Color _accent = Color(0xFF3B82F6);        // Blue-500
   static const Color _success = Color(0xFF34D399);       // Emerald-400
   static const Color _warning = Color(0xFFFBBF24);       // Amber-400
   static const Color _error = Color(0xFFF87171);         // Red-400
