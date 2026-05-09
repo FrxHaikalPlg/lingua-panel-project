@@ -254,6 +254,28 @@ class HomeViewModel extends ChangeNotifier {
             _translatedChapterPages.add(pageBytes);
             downloadedPages++;
           }
+
+          // Save each page to local history
+          _progressMessage = 'Saving to history...';
+          notifyListeners();
+          final isZip = _selectedChapterImages.length == 1 &&
+              _selectedChapterImages.first.path.toLowerCase().endsWith('.zip');
+          for (int i = 0; i < _translatedChapterPages.length; i++) {
+            try {
+              // For ZIP or multi-image: use the original file if available
+              final originalFile = isZip
+                  ? _selectedChapterImages.first
+                  : (i < _selectedChapterImages.length
+                      ? _selectedChapterImages[i]
+                      : _selectedChapterImages.first);
+              await HistoryService.saveTranslation(
+                originalImage: originalFile,
+                translatedImageBytes: _translatedChapterPages[i],
+                sourceLang: _selectedLang,
+                orientation: _selectedOrientation,
+              );
+            } catch (_) {}
+          }
         }
       }
     } on TranslationException catch (e) {
