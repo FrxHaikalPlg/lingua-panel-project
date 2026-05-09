@@ -27,6 +27,7 @@ dependencies:
   package_info_plus: ^8.0.0
   connectivity_plus: ^6.0.3
   file_picker: ^8.0.0
+  share_plus: ^10.0.0
 
 dev_dependencies:
   flutter_test:

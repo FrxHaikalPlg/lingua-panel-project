@@ -8,11 +8,7 @@ class SettingsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-      ),
-      body: Consumer<ThemeViewModel>(
+    return Consumer<ThemeViewModel>(
         builder: (context, themeViewModel, child) {
           return ListView(
             children: [
@@ -33,8 +29,7 @@ class SettingsView extends StatelessWidget {
             ],
           );
         },
-      ),
-    );
+      );
   }
 
   String _themeModeToString(ThemeMode themeMode) {

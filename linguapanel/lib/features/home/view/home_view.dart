@@ -2,130 +2,68 @@ import 'package:linguapanel/core/utils/ui_helpers.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:linguapanel/core/services/auth_service.dart';
-import 'package:linguapanel/features/history/view/favorites_view.dart';
-import 'package:linguapanel/features/history/view/history_view.dart';
-import 'package:linguapanel/features/history/viewmodel/history_viewmodel.dart';
 import 'package:linguapanel/features/home/viewmodel/home_viewmodel.dart';
-import 'package:linguapanel/features/settings/view/settings_view.dart';
 import 'package:linguapanel/features/widgets/full_screen_image_viewer.dart';
 import 'package:provider/provider.dart';
 
-class HomeView extends StatelessWidget {
-  const HomeView({super.key});
+/// Home tab content — no Scaffold/AppBar, used inside MainShell.
+class HomeContent extends StatelessWidget {
+  const HomeContent({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (context) => HomeViewModel()),
-        ChangeNotifierProvider(create: (context) => HistoryViewModel()),
-      ],
-      child: Builder(builder: (context) {
-        final authService = AuthService();
+    return Consumer<HomeViewModel>(
+      builder: (context, viewModel, child) {
+        if (viewModel.errorMessage != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            UIHelpers.showErrorSnackBar(context, viewModel.errorMessage!);
+            viewModel.setErrorMessage(null);
+          });
+        }
+        return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // --- Mode Toggle ---
+                _buildModeToggle(context, viewModel),
+                const SizedBox(height: 16),
 
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('LinguaPanel'),
-            actions: [
-              _appBarAction(Icons.history, 'History', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChangeNotifierProvider.value(
-                      value: Provider.of<HistoryViewModel>(context,
-                          listen: false),
-                      child: const HistoryView(),
-                    ),
-                  ),
-                );
-              }),
-              _appBarAction(Icons.star_rounded, 'Favorites', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChangeNotifierProvider.value(
-                      value: Provider.of<HistoryViewModel>(context,
-                          listen: false),
-                      child: const FavoritesView(),
-                    ),
-                  ),
-                );
-              }),
-              _appBarAction(Icons.settings_rounded, 'Settings', () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SettingsView()),
-                );
-              }),
-              _appBarAction(Icons.logout_rounded, 'Logout', () {
-                authService.signOut();
-              }),
-            ],
-          ),
-          body: Consumer<HomeViewModel>(
-            builder: (context, viewModel, child) {
-              if (viewModel.errorMessage != null) {
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  UIHelpers.showErrorSnackBar(context, viewModel.errorMessage!);
-                  viewModel.setErrorMessage(null);
-                });
-              }
-              return SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // --- Mode Toggle ---
-                      _buildModeToggle(context, viewModel),
-                      const SizedBox(height: 16),
+                // --- Settings Card ---
+                _buildSettingsCard(context, viewModel),
+                const SizedBox(height: 16),
 
-                      // --- Settings Card ---
-                      _buildSettingsCard(context, viewModel),
-                      const SizedBox(height: 16),
-
-                      // --- Content based on mode ---
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 250),
-                        switchInCurve: Curves.easeIn,
-                        switchOutCurve: Curves.easeOut,
-                        transitionBuilder: (child, animation) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: child,
-                          );
-                        },
-                        layoutBuilder: (currentChild, previousChildren) {
-                          return Stack(
-                            alignment: Alignment.topCenter,
-                            children: [
-                              ...previousChildren,
-                              if (currentChild != null) currentChild,
-                            ],
-                          );
-                        },
-                        child: viewModel.mode == TranslationMode.single
-                            ? _buildSingleImageContent(context, viewModel)
-                            : _buildChapterContent(context, viewModel),
-                      ),
-                    ],
-                  ),
+                // --- Content based on mode ---
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  switchInCurve: Curves.easeIn,
+                  switchOutCurve: Curves.easeOut,
+                  transitionBuilder: (child, animation) {
+                    return FadeTransition(
+                      opacity: animation,
+                      child: child,
+                    );
+                  },
+                  layoutBuilder: (currentChild, previousChildren) {
+                    return Stack(
+                      alignment: Alignment.topCenter,
+                      children: [
+                        ...previousChildren,
+                        if (currentChild != null) currentChild,
+                      ],
+                    );
+                  },
+                  child: viewModel.mode == TranslationMode.single
+                      ? _buildSingleImageContent(context, viewModel)
+                      : _buildChapterContent(context, viewModel),
                 ),
-              );
-            },
+              ],
+            ),
           ),
         );
-      }),
-    );
-  }
-
-  Widget _appBarAction(IconData icon, String tooltip, VoidCallback onPressed) {
-    return IconButton(
-      icon: Icon(icon),
-      tooltip: tooltip,
-      onPressed: onPressed,
+      },
     );
   }
 
@@ -222,7 +160,8 @@ class HomeView extends StatelessWidget {
                     isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Direction',
-                      prefixIcon: Icon(Icons.text_rotation_none_rounded, size: 20),
+                      prefixIcon:
+                          Icon(Icons.text_rotation_none_rounded, size: 20),
                       contentPadding:
                           EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       isDense: true,

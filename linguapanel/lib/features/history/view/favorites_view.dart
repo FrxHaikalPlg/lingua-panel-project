@@ -8,8 +8,8 @@ import 'package:linguapanel/features/widgets/full_screen_image_viewer.dart';
 import 'package:linguapanel/features/history/model/translation_history.dart';
 import 'package:provider/provider.dart';
 
-class FavoritesView extends StatelessWidget {
-  const FavoritesView({super.key});
+class FavoritesContent extends StatelessWidget {
+  const FavoritesContent({super.key});
 
   void _openItem(BuildContext context, TranslationHistory item) {
     if (item.isChapter) {
@@ -108,11 +108,7 @@ class FavoritesView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Favorites'),
-      ),
-      body: Consumer<HistoryViewModel>(
+    return Consumer<HistoryViewModel>(
         builder: (context, viewModel, child) {
           final favoriteItems = viewModel.favoriteItems;
 
@@ -134,8 +130,7 @@ class FavoritesView extends StatelessWidget {
             },
           );
         },
-      ),
-    );
+      );
   }
 
   Widget _buildHistoryCard(
@@ -160,8 +155,8 @@ class FavoritesView extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: SizedBox(
-                  width: 70,
-                  height: 90,
+                  width: 80,
+                  height: 110,
                   child: thumbnailExists
                       ? Image.file(thumbnailFile, fit: BoxFit.cover)
                       : Container(
@@ -187,7 +182,7 @@ class FavoritesView extends StatelessWidget {
                               item.title,
                               style: const TextStyle(
                                 fontWeight: FontWeight.bold,
-                                fontSize: 15,
+                                fontSize: 16,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -198,15 +193,15 @@ class FavoritesView extends StatelessWidget {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 6),
                     Text(
                       DateFormat.yMMMd().add_jm().format(item.timestamp),
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 13,
                         color: Colors.grey.shade600,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
                     if (item.isChapter)
                       Container(
                         padding: const EdgeInsets.symmetric(
@@ -235,7 +230,14 @@ class FavoritesView extends StatelessWidget {
                     icon: const Icon(Icons.star, color: Colors.amber, size: 22),
                     onPressed: () => viewModel.toggleFavorite(item.id),
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minHeight: 36),
+                    constraints: const BoxConstraints(minHeight: 30),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.share_rounded,
+                        color: Theme.of(context).colorScheme.primary, size: 22),
+                    onPressed: () => viewModel.shareItem(item),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minHeight: 30),
                   ),
                   IconButton(
                     icon: const Icon(Icons.delete_outline,
@@ -243,7 +245,7 @@ class FavoritesView extends StatelessWidget {
                     onPressed: () => _showDeleteConfirmationDialog(
                         context, viewModel, item.id),
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minHeight: 36),
+                    constraints: const BoxConstraints(minHeight: 30),
                   ),
                 ],
               ),
